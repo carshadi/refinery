@@ -101,6 +101,9 @@ def merge_components_as_ndarray(components):
     for c in components:
         arrays.append(sntutil.tree_to_ndarray(c.getTree()))
 
+    if not arrays:
+        return None
+
     current_idx = arrays[0].shape[0] + 1
     remaped_arrs = [arrays[0]]
     for arr in arrays[1:]:
@@ -164,30 +167,33 @@ def process_swc_file(swc_path, label_mask, output_base_dir, name, voxel_size):
 
     omit_length = sum(c.edgeSet().size() for c in omit)
     omit_arr = merge_components_as_ndarray(omit)
-    _save_swc(
-        omit_arr,
-        os.path.join(output_base_dir, f"{name}_omit.swc"),
-        voxel_size=voxel_size,
-        color=(1, 0, 0)
-    )
+    if omit_arr is not None:
+        _save_swc(
+            omit_arr,
+            os.path.join(output_base_dir, f"{name}_omit.swc"),
+            voxel_size=voxel_size,
+            color=(1, 0, 0)
+        )
 
     split_length = sum(c.edgeSet().size() for c in split)
     split_arr = merge_components_as_ndarray(split)
-    _save_swc(
-        split_arr,
-        os.path.join(output_base_dir, f"{name}_split.swc"),
-        voxel_size=voxel_size,
-        color=(0, 0, 1)
-    )
+    if split_arr is not None:
+        _save_swc(
+            split_arr,
+            os.path.join(output_base_dir, f"{name}_split.swc"),
+            voxel_size=voxel_size,
+            color=(0, 0, 1)
+        )
 
     correct_length = sum(c.edgeSet().size() for c in correct)
     correct_arr = merge_components_as_ndarray(correct)
-    _save_swc(
-        correct_arr,
-        os.path.join(output_base_dir, f"{name}_correct.swc"),
-        voxel_size=voxel_size,
-        color=(0, 1, 0)
-    )
+    if correct_arr is not None:
+        _save_swc(
+            correct_arr,
+            os.path.join(output_base_dir, f"{name}_correct.swc"),
+            voxel_size=voxel_size,
+            color=(0, 1, 0)
+        )
 
     return {
         "omit_length": omit_length,
