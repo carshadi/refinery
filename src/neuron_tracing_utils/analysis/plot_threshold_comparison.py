@@ -118,7 +118,14 @@ def main():
         type=str,
         help="Directory where the NPY files are located."
     )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        help="Directory where the output plots will be saved."
+    )
     args = parser.parse_args()
+
+    os.makedirs(args.output_dir, exist_ok=True)
 
     # Set the default font sizes
     # plt.rcParams['font.size'] = 12
@@ -156,7 +163,13 @@ def main():
         if i > 0:
             axs[i // cols, i % cols].legend().remove()
 
+    # save plot to file
     plt.tight_layout()
+    plt.savefig(
+        os.path.join(args.output_dir, "error_intensities.png"),
+        dpi=300
+    )
+
     plt.show()
 
 
