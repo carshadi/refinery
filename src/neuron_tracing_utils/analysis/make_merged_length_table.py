@@ -118,11 +118,11 @@ def main():
     parser.add_argument(
         "--error-swc-dir",
         type=str,
-        help="Path to the directory containing error-paritioned ground-truth "
+        help="Path to the directory containing error-partitioned ground-truth "
              "SWC files."
     )
     parser.add_argument(
-        "--csv_path",
+        "--csv-path",
         type=str,
         help="Path to the CSV file to write results to."
     )
