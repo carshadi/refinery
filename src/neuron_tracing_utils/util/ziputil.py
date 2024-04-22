@@ -94,7 +94,8 @@ def download_extract_gcs_folder(
     bucket_name: str,
     prefix: str,
     download_dir: str,
-    extract_dir: str
+    extract_dir: str,
+    workers: int = 1
 ):
     """
     Main function to download and extract ZIP files from a GCS bucket in
@@ -110,6 +111,8 @@ def download_extract_gcs_folder(
         Directory to download the ZIP files.
     extract_dir : str
         Directory to extract the contents of the ZIP files.
+    workers : int
+        Number of workers to use for parallel processing.
 
     Returns
     -------
@@ -124,7 +127,7 @@ def download_extract_gcs_folder(
     jobs = [(bucket_name, download_dir, extract_dir, blob_name) for blob_name
             in zip_blobs]
 
-    with multiprocessing.Pool(processes=16) as pool:
+    with multiprocessing.Pool(processes=workers) as pool:
         pool.starmap(download_extract_blob, jobs)
 
 
@@ -158,6 +161,12 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Directory to extract the contents of the ZIP files."
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=multiprocessing.cpu_count(),
+        help="Number of workers to use for parallel processing."
+    )
     return parser.parse_args()
 
 
@@ -179,7 +188,8 @@ def main():
         bucket_name,
         prefix,
         args.download_dir,
-        args.extract_dir
+        args.extract_dir,
+        args.workers
     )
 
 
