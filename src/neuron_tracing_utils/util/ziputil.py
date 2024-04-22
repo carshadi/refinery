@@ -138,19 +138,13 @@ def parse_args() -> argparse.Namespace:
         Namespace containing the command line arguments.
     """
     parser = argparse.ArgumentParser(
-        description="Download and extract ZIP files from cloud storage."
+        description="Download and extract ZIP files from Google Cloud Storage."
     )
     parser.add_argument(
-        "--bucket",
+        "--zip-url",
         type=str,
         required=True,
-        help="bucket name."
-    )
-    parser.add_argument(
-        "--prefix",
-        type=str,
-        required=True,
-        help="Prefix to filter blobs in the bucket."
+        help="Full URL to the directory (e.g., 'gs://bucket_name/prefix')."
     )
     parser.add_argument(
         "--download-dir",
@@ -167,17 +161,27 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-if __name__ == '__main__':
+def main():
     args = parse_args()
 
-    # Ensure the directories exist
+    if not args.zip_url.startswith("gs://"):
+        # TODO: support S3
+        raise ValueError("Invalid GCS URL. It should start with 'gs://'")
+
+    parts = args.zip_url[5:].split('/', 1)
+    bucket_name = parts[0]
+    prefix = parts[1] if len(parts) > 1 else ""
+
     os.makedirs(args.download_dir, exist_ok=True)
     os.makedirs(args.extract_dir, exist_ok=True)
 
-    # Download and extract ZIP files
     download_extract_gcs_folder(
-        args.bucket,
-        args.prefix,
+        bucket_name,
+        prefix,
         args.download_dir,
         args.extract_dir
     )
+
+
+if __name__ == '__main__':
+    main()
