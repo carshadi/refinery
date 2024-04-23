@@ -264,6 +264,8 @@ def main():
     impath = args.image_path
     num_threads = args.num_threads
 
+    os.makedirs(output_dir, exist_ok=True)
+
     swc_files = [os.path.join(swc_dir, f) for f in sorted(os.listdir(swc_dir))
                  if f.endswith(".swc")]
     groups = group_swcs(swc_files)
