@@ -19,7 +19,6 @@ from neuron_tracing_utils.util.java import snt
 def unique_labels(
     graph: Any,
     tensorstore: TensorStore,
-    voxel_size: Tuple[float, float, float]
 ) -> Set[int]:
     """
     Calculates unique labels for the vertices of a graph based on their
@@ -27,8 +26,8 @@ def unique_labels(
 
     Parameters
     ----------
-    graph : Any
-        Graph object containing vertices with spatial properties.
+    graph : snt.DirectedWeightedGraph
+        Graph object representing ground truth SWC file.
     tensorstore : TensorStore
         Tensorstore object used to read label data.
     voxel_size : Tuple[float, float, float]
@@ -39,15 +38,7 @@ def unique_labels(
     Set[int]
         A set of unique labels.
     """
-    points = np.round(
-        [
-            [
-                v.z / voxel_size[2],
-                v.y / voxel_size[1],
-                v.x / voxel_size[0]
-            ] for v in graph.vertexSet()
-        ]
-    ).astype(int)
+    points = np.array([[v.z, v.y, v.x] for v in graph.vertexSet()]).astype(int)
     zs, ys, xs = points[:, 0], points[:, 1], points[:, 2]
     labels = tensorstore[zs, ys, xs].read().result()
     return set(labels)
@@ -56,7 +47,6 @@ def unique_labels(
 def process_swc_file(
     swc_path: str,
     label_mask: TensorStore,
-    voxel_size: Tuple[float, float, float]
 ) -> Set[int]:
     """
     Process a SWC file to find unique labels associated with its components.
@@ -77,11 +67,7 @@ def process_swc_file(
     """
     arr = swcutil.swc_to_ndarray(swc_path)
     graph = sntutil.ndarray_to_graph(arr)
-    comps = graphutil.get_components_iterative(graph)
-    labels = set()
-    for c in comps:
-        labels.update(unique_labels(c, label_mask, voxel_size))
-    return labels
+    return unique_labels(graph, label_mask)
 
 
 def map_filenames_to_paths(folder: str) -> Dict[str, str]:
@@ -186,7 +172,6 @@ def main():
             process_swc_file,
             os.path.join(gt_swc_dir, f),
             label_mask,
-            voxel_size
         )
             for f in sorted(os.listdir(gt_swc_dir))]
         names = [f.split('_')[0] for f in sorted(os.listdir(gt_swc_dir))]
