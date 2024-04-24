@@ -1,3 +1,5 @@
+from neuron_tracing_utils.util.java import snt
+
 
 def prune_contiguous_dups(graph):
     """
@@ -58,3 +60,25 @@ def prune_all_dups(graph):
         else:
             visited.add(idx)
     return dups
+
+
+def get_components_iterative(graph):
+    roots = [v for v in graph.vertexSet() if graph.inDegreeOf(v) == 0]
+    components = []
+    for root in roots:
+        # create an empty graph
+        comp = snt.DirectedWeightedGraph()
+        # iterative depth-first search
+        stack = [root]
+        while stack:
+            v = stack.pop()
+            comp.addVertex(v)
+            out_edges = graph.outgoingEdgesOf(v)
+            for edge in out_edges:
+                child = edge.getTarget()
+                comp.addVertex(child)
+                comp.addEdge(v, child)
+                stack.append(child)
+        components.append(comp)
+
+    return components

@@ -2,7 +2,6 @@ import argparse
 import glob
 import multiprocessing
 import os
-import shutil
 import tempfile
 import zipfile
 from concurrent.futures import ProcessPoolExecutor
@@ -22,8 +21,10 @@ def unzip_file(zip_path: str, extract_path: str = None) -> None:
 
     Parameters:
         zip_path (str): The path of the zip file to be unzipped.
-        extract_path (str, optional): The path where the unzipped files should be placed.
-            If not provided, the files will be unzipped to the same directory as the zip file.
+        extract_path (str, optional): The path where the unzipped files
+        should be placed.
+            If not provided, the files will be unzipped to the same
+            directory as the zip file.
 
     Returns:
         None
@@ -47,17 +48,23 @@ def process_swc_file(
     radius: float = 1.0,
 ) -> Any:
     """
-    Processes an SWC file, performs resampling and filtering based on cable length.
+    Processes an SWC file, performs resampling and filtering based on cable
+    length.
 
     Parameters:
         swc_path (str): The path of the SWC file to be processed.
-        length_threshold (int, optional): The minimum length of cable to consider, default is 200.
-        voxel_size (tuple, optional): The scaling factor for each dimension, default is (1, 1, 1).
-        node_spacing (int, optional): The spacing between nodes after resampling, default is 20.
-        radius (float, optional): The radius to be set for the resampled tree, default is 1.0.
+        length_threshold (int, optional): The minimum length of cable to
+        consider, default is 200.
+        voxel_size (tuple, optional): The scaling factor for each dimension,
+        default is (1, 1, 1).
+        node_spacing (int, optional): The spacing between nodes after
+        resampling, default is 20.
+        radius (float, optional): The radius to be set for the resampled
+        tree, default is 1.0.
 
     Returns:
-        snt.Tree: The processed Tree object if it passes the length threshold, else None.
+        snt.Tree: The processed Tree object if it passes the length
+        threshold, else None.
     """
     arr = swcutil.swc_to_ndarray(swc_path)
     arr[:, 1] = 2
@@ -86,11 +93,13 @@ def process_zip_file(
     radius: float,
 ) -> int:
     """
-    Processes the files in a given zip file and saves the processed files to the output directory.
+    Processes the files in a given zip file and saves the processed files to
+    the output directory.
 
     Parameters:
         zip_path (str): The path of the zip file.
-        output_dir (str): The directory where the processed files will be saved.
+        output_dir (str): The directory where the processed files will be
+        saved.
 
     Returns:
         int: The number of files filtered out.
@@ -130,16 +139,19 @@ def process_all_zip_files(
     max_workers: int = None,
 ) -> int:
     """
-    Processes all zip files in the input directory using multiple workers and saves the processed files.
+    Processes all zip files in the input directory using multiple workers
+    and saves the processed files.
 
     Parameters:
         input_dir (str): The directory containing the zip files.
-        output_dir (str): The directory where the processed files will be saved.
+        output_dir (str): The directory where the processed files will be
+        saved.
         length_threshold (int): The minimum length of cable to consider.
         voxel_size (tuple): The scaling factor for each dimension.
         node_spacing (int): The spacing between nodes after resampling.
         radius (float): The radius to be set for the resampled tree.
-        max_workers (int, optional): The maximum number of workers to use, default is the number of processors.
+        max_workers (int, optional): The maximum number of workers to use,
+        default is the number of processors.
 
     Returns:
         int: The number of files filtered out.
@@ -196,7 +208,8 @@ def upload_file_to_s3(
         file_name (str): File to upload
         bucket (str): Bucket to upload to
         folder (str): Folder within the bucket to upload the file
-        object_name (str, optional): S3 object name. If not specified, the file_name is used
+        object_name (str, optional): S3 object name. If not specified,
+        the file_name is used
 
     Returns:
         bool: True if file was uploaded, else False
@@ -258,7 +271,7 @@ def create_zips(
         os.path.join(output_dir, f"swcs_{i}.zip") for i in range(n_workers)
     ]
     file_chunks = [
-        files[i * files_per_zip : (i + 1) * files_per_zip]
+        files[i * files_per_zip: (i + 1) * files_per_zip]
         for i in range(n_workers)
     ]
 
@@ -280,10 +293,11 @@ if __name__ == "__main__":
         "-o",
         help="The output directory to save processed files.",
     )
-    parser.add_argument("-b", help="S3 bucket name.", default="aind-open-data")
+    parser.add_argument("--s3-bucket", help="S3 bucket name.", default=None)
     parser.add_argument(
-        "-f",
+        "--s3-folder",
         help="Folder within the bucket to upload the files.",
+        default=None
     )
     parser.add_argument(
         "--length_threshold",
@@ -295,7 +309,7 @@ if __name__ == "__main__":
         "--voxel_size",
         nargs=3,
         type=float,
-        default=(0.748, 0.748, 1.0),
+        default=(1.0, 1.0, 1.0),
         help="The scaling factor for each dimension.",
     )
     parser.add_argument(
@@ -318,8 +332,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if not os.path.isdir(args.o):
-        os.makedirs(args.o)
+    os.makedirs(args.o, exist_ok=True)
 
     swc_dir = os.path.join(args.o, "swcs")
     os.makedirs(swc_dir, exist_ok=True)
@@ -344,10 +357,10 @@ if __name__ == "__main__":
     print("Total swcs after filtering: ", total_files)
     print("Total swcs filtered: ", filtered_count)
 
-    # Create zip files from processed SWC files
-    print("Creating zip files...")
-    zip_paths = create_zips(files, zip_dir, args.workers)
-
-    # Upload zip files to S3
-    print("Uploading zip files to S3...")
-    upload_to_s3(zip_paths, args.b, args.f, args.workers)
+    if args.s3_bucket is not None:
+        # Create zip files from processed SWC files
+        print("Creating zip files...")
+        zip_paths = create_zips(files, zip_dir, args.workers)
+        # Upload zip files to S3
+        print("Uploading zip files to S3...")
+        upload_to_s3(zip_paths, args.s3_bucket, args.s3_folder, args.workers)

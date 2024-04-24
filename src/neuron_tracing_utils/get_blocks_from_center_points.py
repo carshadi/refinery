@@ -14,6 +14,7 @@ from distributed import Client
 
 from neuron_tracing_utils.util import chunkutil
 from neuron_tracing_utils.util.java import snt
+from neuron_tracing_utils.util.graphutil import get_components_iterative
 
 SWC_EXTENSION = ".swc"
 
@@ -82,7 +83,7 @@ def crop_swc(swc, min, max):
 
     # Align tracing to block origin (0,0,0)
     trees = []
-    for c in g.getComponents():
+    for c in get_components_iterative(g):
         t = c.getTree()
         t.translate(-min[2], -min[1], -min[0])
         trees.append(t)

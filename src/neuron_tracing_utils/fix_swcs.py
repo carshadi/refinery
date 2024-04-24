@@ -6,6 +6,7 @@ from enum import Enum
 from pathlib import Path
 
 from neuron_tracing_utils.util import ioutil
+from neuron_tracing_utils.util.graphutil import get_components_iterative
 from neuron_tracing_utils.util.imgutil import get_hyperslice
 from neuron_tracing_utils.util.ioutil import ImgReaderFactory
 from neuron_tracing_utils.util.java import snt
@@ -78,9 +79,6 @@ def fix_swcs(in_swc_dir, out_swc_dir, im_path, mode="clip", key=None):
         swcs = [os.path.join(root, f) for f in files if f.endswith(".swc")]
         for swc in swcs:
             print(f"fixing {swc}")
-            out_swc = os.path.join(out_swc_dir, os.path.relpath(swc, in_swc_dir))
-            Path(out_swc).parent.mkdir(exist_ok=True, parents=True)
-
             graph = snt.Tree(swc).getGraph()
 
             _fix_graph(graph, img_shape, mode)
@@ -88,11 +86,17 @@ def fix_swcs(in_swc_dir, out_swc_dir, im_path, mode="clip", key=None):
             if graph.vertexSet().size() <= 1:
                 continue
 
-            components = _get_components_iterative(graph)
+            components = get_components_iterative(graph)
             for i, c in enumerate(components):
                 if c.vertexSet().size() <= 1:
                     continue
-                c.getTree().saveAsSWC(out_swc.replace(".swc", f"-{i}.swc"))
+                suffix = ".swc" if len(components) == 1 else f"-{i:03d}.swc"
+                out_swc = os.path.join(
+                    out_swc_dir,
+                    os.path.relpath(swc, in_swc_dir).replace(".swc", suffix),
+                )
+                Path(out_swc).parent.mkdir(exist_ok=True, parents=True)
+                c.getTree().saveAsSWC(out_swc)
 
 
 def fix_swcs_batch(in_swc_dir, out_swc_dir, imdir, mode="clip"):
@@ -119,33 +123,11 @@ def fix_swcs_batch(in_swc_dir, out_swc_dir, imdir, mode="clip"):
             if graph.vertexSet().size() <= 1:
                 continue
 
-            components = _get_components_iterative(graph)
+            components = get_components_iterative(graph)
             for i, c in enumerate(components):
                 if c.vertexSet().size() <= 1:
                     continue
                 c.getTree().saveAsSWC(out_swc.replace(".swc", f"-{i}.swc"))
-
-
-def _get_components_iterative(graph):
-    roots = [v for v in graph.vertexSet() if graph.inDegreeOf(v) == 0]
-    components = []
-    for root in roots:
-        # create an empty graph
-        comp = snt.DirectedWeightedGraph()
-        # iterative depth-first search
-        stack = [root]
-        while stack:
-            v = stack.pop()
-            comp.addVertex(v)
-            out_edges = graph.outgoingEdgesOf(v)
-            for edge in out_edges:
-                child = edge.getTarget()
-                comp.addVertex(child)
-                comp.addEdge(v, child)
-                stack.append(child)
-        components.append(comp)
-
-    return components
 
 
 def main():
@@ -173,7 +155,7 @@ def main():
         type=str,
         choices=[mode.value for mode in OutOfBoundsMode],
         default=OutOfBoundsMode.clip.value,
-        help="how to handle out-of-bounds points"
+        help="how to handle out-of-bounds points",
     )
     parser.add_argument("--log-level", type=int, default=logging.INFO)
 
@@ -181,8 +163,8 @@ def main():
 
     os.makedirs(args.output, exist_ok=True)
 
-    with open(os.path.join(args.output, 'args.json'), 'w') as f:
-        args.__dict__['script'] = parser.prog
+    with open(os.path.join(args.output, "args.json"), "w") as f:
+        args.__dict__["script"] = parser.prog
         json.dump(args.__dict__, f, indent=2)
 
     logging.basicConfig(format="%(asctime)s %(message)s")
