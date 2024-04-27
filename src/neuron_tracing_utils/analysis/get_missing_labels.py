@@ -2,16 +2,17 @@ import argparse
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
-from functools import partial
 from typing import Tuple, List
 
 import numpy as np
+import pandas as pd
 
 from neuron_tracing_utils.util.ioutil import open_ts
 
 
 def get_component(
-    arr: np.ndarray, seed: Tuple[int, int, int]
+    arr: np.ndarray,
+    seed: Tuple[int, int, int]
 ) -> Tuple[List[Tuple[int, int, int]], int]:
     """
     Get the component coordinates of a label in a 3D segmentation mask,
@@ -50,7 +51,8 @@ def get_component(
 
 
 def get_neighbors(
-    point: Tuple[int, int, int], shape: Tuple[int, int, int]
+    point: Tuple[int, int, int],
+    shape: Tuple[int, int, int]
 ) -> List[Tuple[int, int, int]]:
     """
     Get the 6 neighbors of a point in a 3D array.
@@ -86,29 +88,6 @@ def get_neighbors(
         neighbors.append((z, y, x + 1))
 
     return neighbors
-
-
-def get_seed_component(
-    seed: Tuple[int, int, int], ts: np.ndarray
-) -> Tuple[List[Tuple[int, int, int]], int]:
-    """
-    Get the component and its label for a given seed point in the
-    segmentation mask.
-
-    Parameters
-    ----------
-    seed : Tuple[int, int, int]
-        Seed point coordinates (z, y, x).
-    ts : np.ndarray
-        Segmentation mask array.
-
-    Returns
-    -------
-    Tuple[List[Tuple[int, int, int]], int]
-        Component coordinates and label value.
-    """
-    c, l = get_component(ts, tuple(seed))
-    return c, l
 
 
 def get_comp_bounding_box(
@@ -179,7 +158,7 @@ def process_seed(
     seed: Tuple[int, int, int],
     ts: np.ndarray,
     mesh_dir: str
-) -> float:
+) -> Tuple[float, int]:
     """
     Process a seed point in the segmentation mask, compute the component,
     and save the component data.
@@ -195,10 +174,10 @@ def process_seed(
 
     Returns
     -------
-    float
-        Length of the diagonal of the bounding box around the component.
+    Tuple[float, int]
+        Diagonal of the bounding box, number of voxels in the component.
     """
-    comp, label = get_seed_component(seed, ts)
+    comp, label = get_component(ts, seed)
 
     bbmin, bbmax = get_comp_bounding_box(comp)
 
@@ -212,9 +191,20 @@ def process_seed(
 
     data = data.astype(np.uint32)
 
-    np.save(f"{mesh_dir}/{origin[0]}_{origin[1]}_{origin[2]}.npy", data)
+    # get mask of label
+    mask = data == label
+    # count number of voxels in mask
+    num_voxels = np.sum(mask, axis=None)
 
-    return diag
+    # mask out the label in data
+    data[~mask] = 0
+
+    np.save(
+        f"{mesh_dir}/{label}_{origin[0]}_{origin[1]}_{origin[2]}.npy",
+        data
+    )
+
+    return diag, num_voxels
 
 
 def parse_args() -> argparse.Namespace:
@@ -230,28 +220,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--label-mask",
         type=str,
-        default="gs://allen-nd-goog/from_google/whole_brain/665081"
-                "/202402_73227862_855_mean200.0/label_mask",
     )
     parser.add_argument(
         "--seed-list",
         type=str,
-        default="/scratch/missing_points.txt",
     )
     parser.add_argument(
         "--output",
         type=str,
-        default="/results",
     )
     parser.add_argument(
         "--workers",
         type=int,
-        default=16,
+        default=1,
     )
     parser.add_argument(
         "--cache-size",
         type=int,
-        default=16 * 1024 ** 3,
+        default=1024 ** 3,
     )
     return parser.parse_args()
 
@@ -279,25 +265,25 @@ def main():
     print("Getting components...")
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
-        diags = np.array(
-            list(
-                executor.map(
-                    partial(process_seed, ts=ts, mesh_dir=mesh_dir),
-                    seeds
-                )
-            )
+        results = executor.map(
+            lambda seed: process_seed(seed, ts, mesh_dir),
+            seeds
         )
-    print("Done. ", time.time() - t0)
 
-    diags = np.array(diags)
-    print(f"Mean: {np.mean(diags)}")
-    print(f"Min: {np.min(diags)}")
-    print(f"Max: {np.max(diags)}")
-    print(f"Std: {np.std(diags)}")
+    diags, num_voxels = zip(*results)
 
-    diag_path = os.path.join(args.output, "diags.npy")
-    print("Saving diags to ", diag_path)
-    np.save(diag_path, diags)
+    df = pd.DataFrame(
+        {
+            "diagonal": diags,
+            "num_voxels": num_voxels
+        }
+    )
+
+    print(df.describe())
+
+    df.to_csv(os.path.join(args.output, "results.csv"), index=False)
+
+    print(f"Finished in {time.time() - t0:.2f} seconds")
 
 
 if __name__ == "__main__":
