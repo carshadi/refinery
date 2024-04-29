@@ -28,7 +28,8 @@ dependencies = [
     "jgo@git+https://github.com/scijava/jgo",
     "tqdm",
     "argschema",
-    "seaborn"
+    "seaborn",
+    "pynrrd",
 ]
 
 [project.optional-dependencies]
