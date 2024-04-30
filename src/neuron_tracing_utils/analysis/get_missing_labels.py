@@ -184,6 +184,8 @@ def process_seed(
         Diagonal of the bounding box, number of voxels in the component.
     """
     comp, label = get_component(ts, seed)
+    if not comp:
+        return 0, 0
 
     bbmin, bbmax = get_comp_bounding_box(comp)
 
