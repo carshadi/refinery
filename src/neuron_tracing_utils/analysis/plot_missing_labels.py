@@ -147,6 +147,7 @@ def main() -> None:
     )
 
     # Joint plot
+    plt.figure(figsize=(8, 6))
     plt.scatter(
         data['diagonal'].values,
         data['num_voxels'].values,
