@@ -35,7 +35,10 @@ def get_component(
     component = []
     visited = set()
     stack = [seed]
-    label = arr[seed].read().result()
+    try:
+        label = arr[seed].read().result()
+    except IndexError:
+        return [], 0
     if label == 0:
         return [], 0
     while stack:
@@ -43,7 +46,10 @@ def get_component(
         if point in visited:
             continue
         visited.add(point)
-        val = arr[point].read().result()
+        try:
+            val = arr[point].read().result()
+        except IndexError:
+            continue
         if val == label:
             component.append(point)
             stack.extend(get_neighbors(point, arr.shape))
