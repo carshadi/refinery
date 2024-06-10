@@ -14,7 +14,7 @@ def swc_to_ndarray(swc_path, add_offset=True):
     with open(os.path.abspath(swc_path), "r") as f:
         for line in f.readlines():
             split = line.split()
-            if split[0].strip() == "#":
+            if line[0] == "#":
                 if len(split) == 1:
                     continue
                 if add_offset and split[1].strip() == "OFFSET":
