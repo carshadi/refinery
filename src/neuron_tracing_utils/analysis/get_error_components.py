@@ -166,7 +166,7 @@ def main():
             label_mask,
         )
             for f in sorted(os.listdir(gt_swc_dir))]
-        names = [f.split('_')[0] for f in sorted(os.listdir(gt_swc_dir))]
+        names = [Path(f).stem for f in sorted(os.listdir(gt_swc_dir))]
         for i, future in enumerate(futures):
             try:
                 swc_labels[names[i]] = future.result()
