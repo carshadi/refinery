@@ -6,11 +6,9 @@ import math
 import os
 import shutil
 import time
-from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from pathlib import Path
 
-import imglyb
 import numpy as np
 import scyjava
 import tifffile
@@ -477,17 +475,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--input", type=str, help="directory of .swc files to fill",
-        default=r"C:\Users\cameron.arshadi\Desktop\2018-08-01\endpoint-patches-all"
     )
     parser.add_argument(
         "--output", type=str, help="directory to output mask volumes",
-        default=r"C:\Users\cameron.arshadi\Desktop\2018-08-01\endpoint-patches-meanshift\G-115_consensus\labels"
     )
     parser.add_argument(
         "--images",
         type=str,
         help="directory of images associated with the .swc files",
-        default=r"C:\Users\cameron.arshadi\Desktop\2018-08-01\endpoint-patches-meanshift\G-115_consensus\images"
     )
     parser.add_argument(
         "--dataset",
@@ -503,9 +498,9 @@ def main():
     )
     parser.add_argument(
         "--transform", type=str, help='path to the "transform.txt" file',
-        default=r"C:\Users\cameron.arshadi\Desktop\2018-08-01\transform.txt"
+        default=None
     )
-    parser.add_argument("--voxel-size", type=str, help="voxel size of images")
+    parser.add_argument("--voxel-size", type=str, help="voxel size of images", default=None)
     parser.add_argument(
         "--cost",
         type=str,
