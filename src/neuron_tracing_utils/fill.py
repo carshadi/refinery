@@ -20,7 +20,7 @@ blosc.use_threads = False
 
 from neuron_tracing_utils.transform import WorldToVoxel
 from neuron_tracing_utils.util import imgutil, ioutil
-from neuron_tracing_utils.util.ioutil import ImgReaderFactory, is_n5_zarr, open_n5_zarr_as_ndarray
+from neuron_tracing_utils.util.ioutil import ImgReaderFactory, is_n5_zarr
 from neuron_tracing_utils.util.java import imglib2, imagej1
 from neuron_tracing_utils.util.java import n5
 from neuron_tracing_utils.util.java import snt
@@ -209,21 +209,14 @@ def fill_swc_dir_zarr(
         threshold,
         cal,
         key=None,
-        threads=1,
         cost_min=None,
         cost_max=None
 ):
     img = imgutil.get_hyperslice(
         ImgReaderFactory.create(im_path).load(im_path, key=key), ndim=3
     )
-    tif_file = None
-    if im_path.endswith((".tif", ".tiff")):
-        tif_file = tifffile.TiffFile(im_path)
-        im = zarr.open(tif_file.aszarr(), 'r')
-    else:
-        im = open_n5_zarr_as_ndarray(im_path)[key]
     cost = snt.Reciprocal(cost_min, cost_max)
-    label_ds, gray_ds, gscore_ds = _create_datasets(out_fill_dir, im.shape)
+    label_ds, gscore_ds = _create_datasets(out_fill_dir, list(img.dimensionsAsLongArray()))
     label = 1
     for root, dirs, files in os.walk(swc_dir):
         swcs = [os.path.join(root, f) for f in files if f.endswith(".swc")]
@@ -232,47 +225,48 @@ def fill_swc_dir_zarr(
             segments = _chunk_tree(tree)
             for seg in tqdm(segments):
                 filler = fill_path(seg, img, cost, threshold, cal)
-                _update_fill_stores(im, filler.getFill(), label_ds, gray_ds, gscore_ds, label)
+                _update_fill_stores(filler.getFill(), label_ds, gscore_ds, label)
             label += 1
-    if tif_file is not None:
-        tif_file.close()
 
 
-def _create_datasets(out_fill_dir, shape):
-    label_zarr = zarr.open(zarr.N5Store(os.path.join(out_fill_dir, "Fill_Label_Mask.n5"), 'w'))
+def _create_datasets(out_fill_dir, shape, chunks=(64, 64, 64), compressor=blosc.Blosc(cname="zstd", clevel=1)):
+    label_zarr = zarr.open(
+        zarr.DirectoryStore(
+            os.path.join(out_fill_dir, "Fill_Label_Mask.zarr"),
+            'w',
+            dimension_separator='/'
+        )
+    )
     label_ds = label_zarr.create_dataset(
         "volume",
         shape=shape,
-        chunks=(64, 64, 64),
+        chunks=chunks,
         dtype=np.uint8,
-        compressor=blosc.Blosc(cname="zstd", clevel=1, shuffle=blosc.SHUFFLE),
+        compressor=compressor,
         write_empty_chunks=False,
         fill_value=0
     )
-    gray_zarr = zarr.open(zarr.N5Store(os.path.join(out_fill_dir, "Fill_Gray_Mask.n5"), 'w'))
-    gray_ds = gray_zarr.create_dataset(
-        "volume",
-        shape=shape,
-        chunks=(64, 64, 64),
-        dtype=np.uint16,
-        compressor=blosc.Blosc(cname="zstd", clevel=1, shuffle=blosc.SHUFFLE),
-        write_empty_chunks=False,
-        fill_value=0
+
+    g_scores_zarr = zarr.open(
+        zarr.DirectoryStore(
+            os.path.join(out_fill_dir, "g_scores.zarr"),
+            'w',
+            dimension_separator='/'
+        )
     )
-    g_scores_zarr = zarr.open(zarr.DirectoryStore(os.path.join(out_fill_dir, "g_scores.zarr"), 'w'))
     gscore_ds = g_scores_zarr.create_dataset(
         "volume",
         shape=shape,
-        chunks=(64, 64, 64),
-        dtype=float,
-        compressor=blosc.Blosc(cname="zstd", clevel=1, shuffle=blosc.SHUFFLE),
+        chunks=chunks,
+        dtype=np.float64,
+        compressor=compressor,
         write_empty_chunks=False,
         fill_value=np.nan
     )
-    return label_ds, gray_ds, gscore_ds
+    return label_ds, gscore_ds
 
 
-def _update_fill_stores(im, fill, label_ds, gray_ds, gscore_ds, label):
+def _update_fill_stores(fill, label_ds, gscore_ds, label):
     nodelist = fill.getNodeList()
     nodes = []
     scores = []
@@ -283,8 +277,6 @@ def _update_fill_stores(im, fill, label_ds, gray_ds, gscore_ds, label):
     scores = np.array(scores, dtype=float)
 
     node_idx = tuple(nodes.T)
-    gray_ds.vindex[node_idx] = im.vindex[node_idx]
-
     old_scores = gscore_ds.vindex[node_idx]
 
     new_idx = np.nonzero(np.isnan(old_scores))
@@ -308,7 +300,7 @@ def _range_with_end(start, end, step):
     yield end
 
 
-def _chunk_tree(tree, seg_len=100):
+def _chunk_tree(tree, seg_len=500):
     paths = []
     for b in snt.TreeAnalyzer(tree).getBranches():
         idx = list(_range_with_end(0, b.size() - 1, seg_len))
@@ -607,7 +599,6 @@ def main():
                 threshold=args.threshold,
                 cal=calibration,
                 key=args.dataset,
-                threads=args.threads,
                 cost_min=args.cost_min,
                 cost_max=args.cost_max
             )
