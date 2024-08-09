@@ -216,7 +216,7 @@ def fill_swc_dir_zarr(
         ImgReaderFactory.create(im_path).load(im_path, key=key), ndim=3
     )
     cost = snt.Reciprocal(cost_min, cost_max)
-    label_ds, gscore_ds = _create_datasets(out_fill_dir, list(img.dimensionsAsLongArray()))
+    label_ds, gscore_ds = _create_datasets(out_fill_dir, [1, 1] + list(img.dimensionsAsLongArray()))
     label = 1
     for root, dirs, files in os.walk(swc_dir):
         swcs = [os.path.join(root, f) for f in files if f.endswith(".swc")]
@@ -229,7 +229,7 @@ def fill_swc_dir_zarr(
             label += 1
 
 
-def _create_datasets(out_fill_dir, shape, chunks=(64, 64, 64), compressor=blosc.Blosc(cname="zstd", clevel=1)):
+def _create_datasets(out_fill_dir, shape, chunks=(1, 1, 64, 64, 64), compressor=blosc.Blosc(cname="zstd", clevel=1)):
     label_zarr = zarr.open(
         zarr.DirectoryStore(
             os.path.join(out_fill_dir, "Fill_Label_Mask.zarr"),
@@ -271,7 +271,7 @@ def _update_fill_stores(fill, label_ds, gscore_ds, label):
     nodes = []
     scores = []
     for n in nodelist:
-        nodes.append([n.z, n.y, n.x])
+        nodes.append([0, 0, n.z, n.y, n.x])
         scores.append(n.distance)
     nodes = np.array(nodes, dtype=int)
     scores = np.array(scores, dtype=float)
