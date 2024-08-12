@@ -16,11 +16,11 @@ from ome_zarr.writer import write_multiscales_metadata
 from tqdm import tqdm
 import zarr
 from numcodecs import blosc
+blosc.use_threads = False
+from xarray_multiscale import multiscale
+from xarray_multiscale.reducers import windowed_mode
 
 from neuron_tracing_utils.util.miscutil import range_with_end
-
-blosc.use_threads = False
-
 from neuron_tracing_utils.transform import WorldToVoxel
 from neuron_tracing_utils.util import imgutil, ioutil
 from neuron_tracing_utils.util.ioutil import ImgReaderFactory, is_n5_zarr, get_ome_zarr_metadata
@@ -214,17 +214,23 @@ def fill_swc_dir_zarr(
         key=None,
         cost_min=None,
         cost_max=None,
-        voxel_size=(1.0, 1.0, 1.0)
+        voxel_size=(1.0, 1.0, 1.0),
+        n_levels=1
 ):
     img = imgutil.get_hyperslice(
         ImgReaderFactory.create(im_path).load(im_path, key=key), ndim=3
     )
+
     cost = snt.Reciprocal(cost_min, cost_max)
-    label_ds, gscore_ds = _create_zarr_datasets(
+
+    label_zarr, gscore_zarr = _create_zarr_datasets(
         out_fill_dir,
         [1, 1] + list(img.dimensionsAsLongArray()),
         voxel_size=voxel_size
     )
+    label_ds = label_zarr["0"]
+    gscore_ds = gscore_zarr["0"]
+
     label = 1
     for root, dirs, files in os.walk(swc_dir):
         swcs = [os.path.join(root, f) for f in files if f.endswith(".swc")]
@@ -235,6 +241,35 @@ def fill_swc_dir_zarr(
                 filler = fill_path(seg, img, cost, threshold, cal)
                 _update_fill_stores(filler.getFill(), label_ds, gscore_ds, label)
             label += 1
+
+    _downscale_labels(label_zarr, n_levels=n_levels, voxel_size=voxel_size)
+
+
+def _downscale_labels(
+        label_ds,
+        n_levels=1,
+        voxel_size=(1.0, 1.0, 1.0),
+        compressor=blosc.Blosc(cname="zstd", clevel=1),
+):
+    label_arr = label_ds["0"][:]
+    pyramid = multiscale(
+        label_arr,
+        windowed_mode,
+        (1, 1, 2, 2, 2)
+    )[:n_levels]
+    pyramid = [l.data for l in pyramid]
+    for i in range(1, len(pyramid)):
+        label_ds.create_dataset(
+            str(i),
+            data=pyramid[i],
+            chunks=label_ds["0"].chunks,
+            dtype=np.uint8,
+            compressor=compressor,
+            write_empty_chunks=False,
+            fill_value=0
+        )
+    datasets, axes = get_ome_zarr_metadata(voxel_size, n_levels=n_levels)
+    write_multiscales_metadata(label_ds, datasets=datasets, axes=axes)
 
 
 def _create_zarr_datasets(
@@ -253,7 +288,7 @@ def _create_zarr_datasets(
             dimension_separator='/'
         )
     )
-    label_ds = label_zarr.create_dataset(
+    label_zarr.create_dataset(
         "0",
         shape=shape,
         chunks=chunks,
@@ -262,7 +297,6 @@ def _create_zarr_datasets(
         write_empty_chunks=False,
         fill_value=0
     )
-    write_multiscales_metadata(label_zarr, datasets=datasets, axes=axes)
 
     g_scores_zarr = zarr.open(
         zarr.DirectoryStore(
@@ -271,7 +305,7 @@ def _create_zarr_datasets(
             dimension_separator='/'
         )
     )
-    gscore_ds = g_scores_zarr.create_dataset(
+    g_scores_zarr.create_dataset(
         "0",
         shape=shape,
         chunks=chunks,
@@ -282,7 +316,7 @@ def _create_zarr_datasets(
     )
     write_multiscales_metadata(g_scores_zarr, datasets=datasets, axes=axes)
 
-    return label_ds, gscore_ds
+    return label_zarr, g_scores_zarr
 
 
 def _update_fill_stores(fill, label_ds, gscore_ds, label):
@@ -555,6 +589,12 @@ def main():
         default=False,
         action="store_true"
     )
+    parser.add_argument(
+        "--label-scales",
+        type=int,
+        default=1,
+        help="number of levels in the multiscale zarr pyramid for the label mask"
+    )
 
     args = parser.parse_args()
     if os.path.isdir(args.output):
@@ -612,7 +652,8 @@ def main():
                 key=args.dataset,
                 cost_min=args.cost_min,
                 cost_max=args.cost_max,
-                voxel_size=voxel_size
+                voxel_size=voxel_size,
+                n_levels=args.label_scales
             )
     elif args.task == "patches":
         fill_patch_dir(
