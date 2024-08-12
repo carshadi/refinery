@@ -12,15 +12,18 @@ from pathlib import Path
 import numpy as np
 import scyjava
 import tifffile
+from ome_zarr.writer import write_multiscales_metadata
 from tqdm import tqdm
 import zarr
 from numcodecs import blosc
+
+from neuron_tracing_utils.util.miscutil import range_with_end
 
 blosc.use_threads = False
 
 from neuron_tracing_utils.transform import WorldToVoxel
 from neuron_tracing_utils.util import imgutil, ioutil
-from neuron_tracing_utils.util.ioutil import ImgReaderFactory, is_n5_zarr
+from neuron_tracing_utils.util.ioutil import ImgReaderFactory, is_n5_zarr, get_ome_zarr_metadata
 from neuron_tracing_utils.util.java import imglib2, imagej1
 from neuron_tracing_utils.util.java import n5
 from neuron_tracing_utils.util.java import snt
@@ -210,13 +213,18 @@ def fill_swc_dir_zarr(
         cal,
         key=None,
         cost_min=None,
-        cost_max=None
+        cost_max=None,
+        voxel_size=(1.0, 1.0, 1.0)
 ):
     img = imgutil.get_hyperslice(
         ImgReaderFactory.create(im_path).load(im_path, key=key), ndim=3
     )
     cost = snt.Reciprocal(cost_min, cost_max)
-    label_ds, gscore_ds = _create_datasets(out_fill_dir, [1, 1] + list(img.dimensionsAsLongArray()))
+    label_ds, gscore_ds = _create_zarr_datasets(
+        out_fill_dir,
+        [1, 1] + list(img.dimensionsAsLongArray()),
+        voxel_size=voxel_size
+    )
     label = 1
     for root, dirs, files in os.walk(swc_dir):
         swcs = [os.path.join(root, f) for f in files if f.endswith(".swc")]
@@ -229,7 +237,15 @@ def fill_swc_dir_zarr(
             label += 1
 
 
-def _create_datasets(out_fill_dir, shape, chunks=(1, 1, 64, 64, 64), compressor=blosc.Blosc(cname="zstd", clevel=1)):
+def _create_zarr_datasets(
+        out_fill_dir,
+        shape,
+        chunks=(1, 1, 64, 64, 64),
+        compressor=blosc.Blosc(cname="zstd", clevel=1),
+        voxel_size=(1.0, 1.0, 1.0)
+):
+    datasets, axes = get_ome_zarr_metadata(voxel_size)
+
     label_zarr = zarr.open(
         zarr.DirectoryStore(
             os.path.join(out_fill_dir, "Fill_Label_Mask.zarr"),
@@ -238,7 +254,7 @@ def _create_datasets(out_fill_dir, shape, chunks=(1, 1, 64, 64, 64), compressor=
         )
     )
     label_ds = label_zarr.create_dataset(
-        "volume",
+        "0",
         shape=shape,
         chunks=chunks,
         dtype=np.uint8,
@@ -246,16 +262,17 @@ def _create_datasets(out_fill_dir, shape, chunks=(1, 1, 64, 64, 64), compressor=
         write_empty_chunks=False,
         fill_value=0
     )
+    write_multiscales_metadata(label_zarr, datasets=datasets, axes=axes)
 
     g_scores_zarr = zarr.open(
         zarr.DirectoryStore(
-            os.path.join(out_fill_dir, "g_scores.zarr"),
+            os.path.join(out_fill_dir, "G_Scores.zarr"),
             'w',
             dimension_separator='/'
         )
     )
     gscore_ds = g_scores_zarr.create_dataset(
-        "volume",
+        "0",
         shape=shape,
         chunks=chunks,
         dtype=np.float64,
@@ -263,6 +280,8 @@ def _create_datasets(out_fill_dir, shape, chunks=(1, 1, 64, 64, 64), compressor=
         write_empty_chunks=False,
         fill_value=np.nan
     )
+    write_multiscales_metadata(g_scores_zarr, datasets=datasets, axes=axes)
+
     return label_ds, gscore_ds
 
 
@@ -292,18 +311,10 @@ def _update_fill_stores(fill, label_ds, gscore_ds, label):
         gscore_ds.vindex[better_nodes] = scores[better_idx]
 
 
-def _range_with_end(start, end, step):
-    i = start
-    while i < end:
-        yield i
-        i += step
-    yield end
-
-
-def _chunk_tree(tree, seg_len=500):
+def _chunk_tree(tree, seg_len=1000):
     paths = []
     for b in snt.TreeAnalyzer(tree).getBranches():
-        idx = list(_range_with_end(0, b.size() - 1, seg_len))
+        idx = list(range_with_end(0, b.size() - 1, seg_len))
         for i in range(len(idx) - 1):
             paths.append(b.getSection(idx[i], idx[i + 1]))
     return paths
@@ -600,7 +611,8 @@ def main():
                 cal=calibration,
                 key=args.dataset,
                 cost_min=args.cost_min,
-                cost_max=args.cost_max
+                cost_max=args.cost_max,
+                voxel_size=voxel_size
             )
     elif args.task == "patches":
         fill_patch_dir(

@@ -25,11 +25,11 @@ dependencies = [
     "boto3",
     "gcsfs",
     "tensorstore",
-    "jgo@git+https://github.com/scijava/jgo",
     "tqdm",
     "argschema",
     "seaborn",
-    "pynrrd",
+    "ome-zarr",
+    "xarray-multiscale"
 ]
 
 [project.optional-dependencies]

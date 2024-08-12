@@ -1,7 +1,9 @@
 import logging
 import os.path
+from typing import List, Dict, Tuple
 from urllib.parse import urlparse
 
+import numpy as np
 import tensorstore as ts
 import zarr
 from tensorstore import TensorStore
@@ -179,3 +181,30 @@ def _get_driver_string(image_path: str):
 def is_n5_zarr(path):
     ret = open_n5_zarr_as_ndarray(path)
     return ret is not None
+
+
+def get_ome_zarr_metadata(
+        voxel_size: List[float],
+        n_levels: int = 1
+) -> Tuple[List[Dict], List[Dict]]:
+    """
+    Generate the multiscale metadata for a tensorstore.
+    Args:
+        voxel_size:  The voxel size in micrometers.
+        n_levels:  The number of levels in the multiscale pyramid.
+
+    Returns:
+        datasets:  The list of datasets in the multiscale pyramid.
+        axes:  The list of axes in the multiscale pyramid.
+    """
+    voxel_size = np.array([1, 1] + list(reversed(voxel_size)))
+    scales = [np.concatenate((voxel_size[:2], voxel_size[2:] * 2 ** i)) for i in range(n_levels)]
+    coordinate_transformations = [[{"type": "scale", "scale": scale.tolist()}] for scale in scales]
+    datasets = [{"path": str(i), "coordinateTransformations": coordinate_transformations[i]} for i in range(n_levels)]
+    axes = [{"name": 't', "type": "time", "unit": "millisecond"},
+            {"name": 'c', "type": "channel"},
+            {"name": 'z', "type": "space", "unit": "micrometer"},
+            {"name": 'y', "type": "space", "unit": "micrometer"},
+            {"name": 'x', "type": "space", "unit": "micrometer"}]
+
+    return datasets, axes
