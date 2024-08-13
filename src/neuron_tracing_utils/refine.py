@@ -155,7 +155,7 @@ def refine_graph(
             try:
                 fut.result()
             except Exception as e:
-                logging.exception(e)
+                logging.debug(f"Error: {e}")
 
 
 def fit_path(path, img, radius):
