@@ -2,31 +2,29 @@ import argparse
 import ast
 import json
 import logging
-import math
 import os
 import shutil
-import time
 from enum import Enum
-from pathlib import Path
 
 import numpy as np
 import scyjava
-import tifffile
 from ome_zarr.writer import write_multiscales_metadata
 from tqdm import tqdm
 import zarr
 from numcodecs import blosc
-blosc.use_threads = False
 from xarray_multiscale import multiscale
 from xarray_multiscale.reducers import windowed_mode
 
 from neuron_tracing_utils.util.miscutil import range_with_end
 from neuron_tracing_utils.transform import WorldToVoxel
-from neuron_tracing_utils.util import imgutil, ioutil
-from neuron_tracing_utils.util.ioutil import ImgReaderFactory, is_n5_zarr, get_ome_zarr_metadata
-from neuron_tracing_utils.util.java import imglib2, imagej1
-from neuron_tracing_utils.util.java import n5
+from neuron_tracing_utils.util import imgutil
+from neuron_tracing_utils.util.ioutil import (
+    ImgReaderFactory,
+    get_ome_zarr_metadata,
+)
+from neuron_tracing_utils.util.java import imagej1
 from neuron_tracing_utils.util.java import snt
+
 
 DEFAULT_Z_FUDGE = 0.8
 
@@ -59,163 +57,17 @@ def fill_path(path, img, cost, threshold, calibration):
     return thread
 
 
-def fill_image_dir(
-        swc_dir,
-        im_dir,
-        out_mask_dir,
-        cost_str,
-        threshold,
-        cal,
-        export_labels=True,
-        export_gray=True,
-        as_n5=False,
-        use_global_stats=False,
-        cost_min=-2,
-        cost_max=10,
-):
-    Tree = snt.Tree
-    FillConverter = snt.FillConverter
-    DiskCachedCellImgFactory = imglib2.DiskCachedCellImgFactory
-    UnsignedShortType = imglib2.UnsignedShortType
-    UnsignedByteType = imglib2.UnsignedByteType
-
-    if use_global_stats:
-        t0 = time.time()
-        mean, std, minimum, maximum = calc_stats(image_dir=im_dir)
-        logging.info(f"Computing stats took {time.time() - t0}s")
-        logging.info(
-            f"Global mean: {mean}, std: {std}, min: {minimum}, max: {maximum}"
-        )
-
-        cost, params = get_cost_global(cost_str, mean, std, cost_min, cost_max)
-
-    im_fmt = ioutil.get_file_format(im_dir)
-    for root, dirs, files in os.walk(swc_dir):
-        swcs = [os.path.join(root, f) for f in files if f.endswith(".swc")]
-        if not swcs:
-            continue
-
-        img_name = os.path.basename(root)
-        tiff = os.path.join(im_dir, img_name + im_fmt)
-        logging.info(f"Generating masks for {tiff}")
-        try:
-            im = tifffile.imread(tiff)
-        except Exception as e:
-            logging.error(e)
-            continue
-
-        if not use_global_stats:
-            cost, params = get_cost(im, cost_str)
-
-        logging.info(f"cost params: {params}")
-
-        img = ImgReaderFactory.create(tiff).load(tiff)
-
-        filler_threads = []
-        for f in swcs:
-            tree = Tree(os.path.join(root, f))
-            thread = fill_paths(tree.list(), img, cost, threshold, cal)
-            filler_threads.append(thread)
-
-        converter = FillConverter(filler_threads)
-
-        if export_gray:
-            mask = DiskCachedCellImgFactory(UnsignedShortType()).create(
-                img.dimensionsAsLongArray()
-            )
-            converter.convert(img, mask)
-            mask_name = img_name + "_Fill_Gray_Mask.n5"
-            _save_mask(mask, out_mask_dir, mask_name, as_n5)
-
-        if export_labels:
-            mask = DiskCachedCellImgFactory(UnsignedByteType()).create(
-                img.dimensionsAsLongArray()
-            )
-            converter.convertLabels(mask)
-            mask_name = img_name + "_Fill_Label_Mask.n5"
-            _save_mask(mask, out_mask_dir, mask_name, as_n5)
-
-        # save cost params
-        with open(
-                os.path.join(out_mask_dir, img_name + "_fill_params.json"), "w"
-        ) as f:
-            json.dump(params, f)
-
-
-def fill_patch_dir(
-        patch_dir: Path,
-        cost_str,
-        threshold,
-        cal,
-        structure,
-        export_gray=False,
-        export_binary=True,
-        cost_min=None,
-        cost_max=None
-):
-    cost = snt.Reciprocal(cost_min, cost_max)
-    for neuron_dir in patch_dir.iterdir():
-        if not neuron_dir.is_dir():
-            continue
-        swc_dir = neuron_dir / "swcs"
-        image_dir = neuron_dir / "images"
-        if not swc_dir.is_dir():
-            raise Exception(f"Missing swc dir for {neuron_dir}")
-        if not image_dir.is_dir():
-            raise Exception(f"Missing image dir for {neuron_dir}")
-        out_mask_dir = neuron_dir / "masks"
-        out_mask_dir.mkdir(exist_ok=True)
-        for struct_dir in swc_dir.iterdir():
-            struct = struct_dir.name
-            if structure != "all" and struct != structure:
-                continue
-            aligned_swcs = struct_dir / "patch-aligned"
-            if not aligned_swcs.is_dir():
-                raise Exception(
-                    f"Aligned swc dir does not exist: {aligned_swcs}"
-                )
-            for swc in aligned_swcs.iterdir():
-                if not swc.name.endswith(".swc"):
-                    continue
-                patch_name = swc.stem
-                im_path = image_dir / struct / (patch_name + ".tif")
-                if not im_path.is_file():
-                    raise Exception(f"Missing image for {im_path}")
-                img = ImgReaderFactory.create(im_path).load(str(im_path))
-                tree = snt.Tree(str(swc))
-                filler = fill_path(tree.list()[0], img, cost, threshold, cal)
-                converter = snt.FillConverter([filler])
-                struct_mask_dir = out_mask_dir / struct
-                struct_mask_dir.mkdir(exist_ok=True)
-                if export_gray:
-                    mask = imglib2.ArrayImgFactory(
-                        imglib2.UnsignedShortType()
-                    ).create(img.dimensionsAsLongArray())
-                    converter.convert(img, mask)
-                    mask_name = patch_name + "_gray_mask.tif"
-                    logging.info(f"Saving gray mask {mask_name}")
-                    _save_mask(mask, struct_mask_dir, mask_name, as_n5=False)
-                if export_binary:
-                    mask = imglib2.ArrayImgFactory(imglib2.BitType()).create(
-                        img.dimensionsAsLongArray()
-                    )
-                    converter.convertBinary(mask)
-                    mask_name = patch_name + "_label_mask.tif"
-                    logging.info(f"Saving binary mask {mask_name}")
-                    _save_mask(mask, struct_mask_dir, mask_name, as_n5=False)
-
-
 def fill_swc_dir_zarr(
-        swc_dir,
-        im_path,
-        out_fill_dir,
-        threshold,
-        cal,
-        key=None,
-        cost_min=None,
-        cost_max=None,
-        voxel_size=(1.0, 1.0, 1.0),
-        n_levels=1
+    swc_dir,
+    im_path,
+    out_fill_dir,
+    threshold,
+    cal,
+    key=None,
+    cost_min=None,
+    cost_max=None,
+    voxel_size=(1.0, 1.0, 1.0),
+    n_levels=1,
 ):
     img = imgutil.get_hyperslice(
         ImgReaderFactory.create(im_path).load(im_path, key=key), ndim=3
@@ -226,7 +78,7 @@ def fill_swc_dir_zarr(
     label_zarr, gscore_zarr = _create_zarr_datasets(
         out_fill_dir,
         [1, 1] + list(img.dimensionsAsLongArray()),
-        voxel_size=voxel_size
+        voxel_size=voxel_size,
     )
     label_ds = label_zarr["0"]
     gscore_ds = gscore_zarr["0"]
@@ -239,24 +91,22 @@ def fill_swc_dir_zarr(
             segments = _chunk_tree(tree)
             for seg in tqdm(segments):
                 filler = fill_path(seg, img, cost, threshold, cal)
-                _update_fill_stores(filler.getFill(), label_ds, gscore_ds, label)
+                _update_fill_stores(
+                    filler.getFill(), label_ds, gscore_ds, label
+                )
             label += 1
 
     _downscale_labels(label_zarr, n_levels=n_levels, voxel_size=voxel_size)
 
 
 def _downscale_labels(
-        label_ds,
-        n_levels=1,
-        voxel_size=(1.0, 1.0, 1.0),
-        compressor=blosc.Blosc(cname="zstd", clevel=1),
+    label_ds,
+    n_levels=1,
+    voxel_size=(1.0, 1.0, 1.0),
+    compressor=blosc.Blosc(cname="zstd", clevel=1),
 ):
     label_arr = label_ds["0"][:]
-    pyramid = multiscale(
-        label_arr,
-        windowed_mode,
-        (1, 1, 2, 2, 2)
-    )[:n_levels]
+    pyramid = multiscale(label_arr, windowed_mode, (1, 1, 2, 2, 2))[:n_levels]
     pyramid = [l.data for l in pyramid]
     for i in range(1, len(pyramid)):
         label_ds.create_dataset(
@@ -266,26 +116,26 @@ def _downscale_labels(
             dtype=np.uint8,
             compressor=compressor,
             write_empty_chunks=False,
-            fill_value=0
+            fill_value=0,
         )
     datasets, axes = get_ome_zarr_metadata(voxel_size, n_levels=n_levels)
     write_multiscales_metadata(label_ds, datasets=datasets, axes=axes)
 
 
 def _create_zarr_datasets(
-        out_fill_dir,
-        shape,
-        chunks=(1, 1, 64, 64, 64),
-        compressor=blosc.Blosc(cname="zstd", clevel=1),
-        voxel_size=(1.0, 1.0, 1.0)
+    out_fill_dir,
+    shape,
+    chunks=(1, 1, 64, 64, 64),
+    compressor=blosc.Blosc(cname="zstd", clevel=1),
+    voxel_size=(1.0, 1.0, 1.0),
 ):
     datasets, axes = get_ome_zarr_metadata(voxel_size)
 
     label_zarr = zarr.open(
         zarr.DirectoryStore(
             os.path.join(out_fill_dir, "Fill_Label_Mask.zarr"),
-            'w',
-            dimension_separator='/'
+            "w",
+            dimension_separator="/",
         )
     )
     label_zarr.create_dataset(
@@ -295,14 +145,14 @@ def _create_zarr_datasets(
         dtype=np.uint8,
         compressor=compressor,
         write_empty_chunks=False,
-        fill_value=0
+        fill_value=0,
     )
 
     g_scores_zarr = zarr.open(
         zarr.DirectoryStore(
             os.path.join(out_fill_dir, "G_Scores.zarr"),
-            'w',
-            dimension_separator='/'
+            "w",
+            dimension_separator="/",
         )
     )
     g_scores_zarr.create_dataset(
@@ -312,7 +162,7 @@ def _create_zarr_datasets(
         dtype=np.float64,
         compressor=compressor,
         write_empty_chunks=False,
-        fill_value=np.nan
+        fill_value=np.nan,
     )
     write_multiscales_metadata(g_scores_zarr, datasets=datasets, axes=axes)
 
@@ -354,7 +204,7 @@ def _chunk_tree(tree, seg_len=1000):
     return paths
 
 
-def get_cost(im, cost_str, z_fudge=DEFAULT_Z_FUDGE):
+def _get_cost(im, cost_str, z_fudge=DEFAULT_Z_FUDGE):
     Reciprocal = snt.Reciprocal
     OneMinusErf = snt.OneMinusErf
 
@@ -392,43 +242,6 @@ def get_cost(im, cost_str, z_fudge=DEFAULT_Z_FUDGE):
     return cost, params
 
 
-def get_cost_global(
-        cost_str, mean, std, cost_min, cost_max, z_fudge=DEFAULT_Z_FUDGE
-):
-    Reciprocal = snt.Reciprocal
-    OneMinusErf = snt.OneMinusErf
-    params = {}
-
-    if cost_str == Cost.reciprocal.value:
-        minimum = max(0, mean + cost_min * std)
-        maximum = mean + cost_max * std
-        cost = Reciprocal(minimum, maximum)
-        params["fill_cost_function"] = {
-            "name": Cost.reciprocal.value,
-            "args": {"min": minimum, "max": maximum},
-        }
-    elif cost_str == Cost.one_minus_erf.value:
-        maximum = mean + cost_max * std
-        cost = OneMinusErf(maximum, mean, std)
-        # reduce z-score by a factor,
-        # so we can numerically distinguish more
-        # very bright voxels
-        cost.setZFudge(z_fudge)
-        params["fill_cost_function"] = {
-            "name": Cost.one_minus_erf.value,
-            "args": {
-                "max": maximum,
-                "average": mean,
-                "standardDeviation": std,
-                "zFudge": z_fudge,
-            },
-        }
-    else:
-        raise ValueError(f"Invalid cost {cost_str}")
-
-    return cost, params
-
-
 def _path_values(img, path):
     ProfileProcessor = snt.ProfileProcessor
 
@@ -439,93 +252,25 @@ def _path_values(img, path):
     return vals
 
 
-def _save_mask(mask, mask_dir, mask_name, as_n5=False):
-    Views = imglib2.Views
-    IJ = imagej1.IJ
-    ImageJFunctions = imglib2.ImageJFunctions
-
-    mask_path = os.path.join(mask_dir, mask_name)
-    if as_n5:
-        _save_n5(mask_path, mask)
-    else:
-        # ImageJ treats the 3rd dimension as channel instead of depth,
-        # so add a dummy Z dimension to the end (XYCZ) and swap dimensions 2 and 3 (XYZC).
-        # Opening this image in ImageJ will then show the correct axis type (XYZ)
-        imp = ImageJFunctions.wrap(
-            Views.permute(Views.addDimension(mask, 0, 0), 2, 3), ""
-        )
-        IJ.saveAsTiff(imp, mask_path)
-
-
-def _save_n5(filepath, img, dataset="volume", block_size=None):
-    from java.lang import Runtime
-    from java.util.concurrent import Executors
-
-    if block_size is None:
-        block_size = [64, 64, 64]
-    n5Writer = n5.N5FSWriter(filepath)
-    logging.info("Saving N5...")
-    exec = Executors.newFixedThreadPool(
-        Runtime.getRuntime().availableProcessors()
-    )
-    n5.N5Utils.save(
-        img, n5Writer, dataset, block_size, n5.GzipCompression(6), exec
-    )
-    exec.shutdown()
-    logging.info("Finished saving N5.")
-
-
-def calc_stats(image_dir):
-    global_min: float = float("inf")
-    global_max: float = float("-inf")
-    global_n: int = 0
-    global_sum: float = 0
-    counts = []
-    variances = []
-    means = []
-    for imfile in Path(image_dir).iterdir():
-        im = tifffile.imread(str(imfile))
-
-        global_sum += im.sum(dtype=np.float64)
-        global_n += im.size
-        global_min = min(global_min, im.min())
-        global_max = max(global_max, im.max())
-
-        counts.append(im.size)
-        variances.append(im.var(dtype=np.float64))
-        means.append(im.mean(dtype=np.float64))
-
-    global_mean: float = global_sum / global_n
-
-    # get the overall standard deviation
-    ssq: float = 0
-    for i in range(len(variances)):
-        ssq += (counts[i] - 1) * variances[i] + (counts[i] - 1) * (
-                means[i] - global_mean
-        ) ** 2
-    global_std: float = math.sqrt(ssq / (global_n - 1))
-
-    return global_mean, global_std, global_min, global_max
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--input", type=str, help="directory of .swc files to fill",
+        "--swcs",
+        type=str,
+        help="directory of .swc files to fill",
     )
     parser.add_argument(
-        "--output", type=str, help="directory to output mask volumes",
+        "--output",
+        type=str,
+        help="directory to output mask volumes",
     )
     parser.add_argument(
-        "--images",
+        "--image",
         type=str,
         help="directory of images associated with the .swc files",
     )
     parser.add_argument(
-        "--dataset",
-        type=str,
-        default=None,
-        help="path to the n5/zarr dataset"
+        "--dataset", type=str, default=None, help="path to the n5/zarr dataset"
     )
     parser.add_argument(
         "--threshold",
@@ -534,10 +279,17 @@ def main():
         help="distance threshold for fill algorithm",
     )
     parser.add_argument(
-        "--transform", type=str, help='path to the "transform.txt" file',
-        default=None
+        "--transform",
+        type=str,
+        help='path to the "transform.txt" file',
+        default=None,
     )
-    parser.add_argument("--voxel-size", type=str, help="voxel size of images", default=None)
+    parser.add_argument(
+        "--voxel-size",
+        type=str,
+        help="voxel size of images",
+        default=None,
+    )
     parser.add_argument(
         "--cost",
         type=str,
@@ -545,55 +297,26 @@ def main():
         default=Cost.reciprocal.value,
         help="cost function for the Dijkstra search",
     )
-    parser.add_argument(
-        "--task",
-        type=str,
-        choices=["trees", "patches"],
-        default="trees",
-        help="task to run",
-    )
-    parser.add_argument(
-        "--structure",
-        choices=["soma", "endpoints", "branches", "all"],
-        default="endpoints",
-    )
     parser.add_argument("--log-level", type=int, default=logging.INFO)
-    parser.add_argument(
-        "--use-global-stats",
-        action="store_true",
-        default=False,
-        help="use the statistics of all blocks for the cost function."
-             "Otherwise, the statistics for each block are computed individually.",
-    )
     parser.add_argument(
         "--cost-min",
         type=float,
         default=None,
         help="the value at which the cost function is maximized, "
-             "expressed in number of standard deviations from the mean intensity.",
+        "expressed in number of standard deviations from the mean intensity.",
     )
     parser.add_argument(
         "--cost-max",
         type=float,
         default=None,
         help="the value at which the cost function is minimized, expressed in"
-             "number of standard deviations from the mean intensity.",
-    )
-    parser.add_argument(
-        "--threads",
-        type=int,
-        default=1
-    )
-    parser.add_argument(
-        "--n5",
-        default=False,
-        action="store_true"
+        "number of standard deviations from the mean intensity.",
     )
     parser.add_argument(
         "--label-scales",
         type=int,
         default=1,
-        help="number of levels in the multiscale zarr pyramid for the label mask"
+        help="number of levels in the multiscale zarr pyramid for the label mask",
     )
 
     args = parser.parse_args()
@@ -626,47 +349,18 @@ def main():
     calibration.pixelHeight = voxel_size[1]
     calibration.pixelDepth = voxel_size[2]
 
-    if args.task == "trees":
-        if os.path.isdir(args.images) and not is_n5_zarr(args.images):
-            fill_image_dir(
-                args.input,
-                args.images,
-                args.output,
-                args.cost,
-                args.threshold,
-                calibration,
-                export_labels=True,
-                export_gray=True,
-                as_n5=args.n5,
-                use_global_stats=args.use_global_stats,
-                cost_min=args.cost_min,
-                cost_max=args.cost_max,
-            )
-        else:
-            fill_swc_dir_zarr(
-                swc_dir=args.input,
-                im_path=args.images,
-                out_fill_dir=args.output,
-                threshold=args.threshold,
-                cal=calibration,
-                key=args.dataset,
-                cost_min=args.cost_min,
-                cost_max=args.cost_max,
-                voxel_size=voxel_size,
-                n_levels=args.label_scales
-            )
-    elif args.task == "patches":
-        fill_patch_dir(
-            Path(args.input),
-            args.cost,
-            args.threshold,
-            calibration,
-            args.structure,
-            cost_min=args.cost_min,
-            cost_max=args.cost_max
-        )
-    else:
-        raise Exception(f"Invalid task: {args.task}")
+    fill_swc_dir_zarr(
+        swc_dir=args.swcs,
+        im_path=args.image,
+        out_fill_dir=args.output,
+        threshold=args.threshold,
+        cal=calibration,
+        key=args.dataset,
+        cost_min=args.cost_min,
+        cost_max=args.cost_max,
+        voxel_size=voxel_size,
+        n_levels=args.label_scales,
+    )
 
 
 if __name__ == "__main__":
