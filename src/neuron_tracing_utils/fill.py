@@ -21,6 +21,7 @@ from neuron_tracing_utils.util import imgutil
 from neuron_tracing_utils.util.ioutil import (
     ImgReaderFactory,
     get_ome_zarr_metadata,
+    open_n5_zarr_as_ndarray,
 )
 from neuron_tracing_utils.util.java import imagej1
 from neuron_tracing_utils.util.java import snt
@@ -62,10 +63,9 @@ def fill_swc_dir_zarr(
     im_path,
     out_fill_dir,
     threshold,
+    cost,
     cal,
     key=None,
-    cost_min=None,
-    cost_max=None,
     voxel_size=(1.0, 1.0, 1.0),
     n_levels=1,
 ):
@@ -85,8 +85,6 @@ def fill_swc_dir_zarr(
     )
     label_ds = label_zarr["0"]
     gscore_ds = gscore_zarr["0"]
-
-    cost = snt.Reciprocal(cost_min, cost_max)
 
     label = 1
     for f in swcs:
@@ -224,25 +222,26 @@ def _chunk_tree(tree, seg_len=1000):
     return paths
 
 
-def _get_cost(im, cost_str, z_fudge=DEFAULT_Z_FUDGE):
+def _get_cost(im, cost_str, z_fudge=DEFAULT_Z_FUDGE, percentiles=(1, 99.9)):
     Reciprocal = snt.Reciprocal
     OneMinusErf = snt.OneMinusErf
 
     params = {}
 
+    vmin, vmax = np.percentile(im, percentiles)
+
+    print(f"Percentiles: {(vmin, vmax)}")
+
     if cost_str == Cost.reciprocal.value:
-        mean = float(np.mean(im))
-        maximum = float(np.max(im))
-        cost = Reciprocal(mean, maximum)
+        cost = Reciprocal(vmin, vmax)
         params["fill_cost_function"] = {
             "name": Cost.reciprocal.value,
-            "args": {"min": mean, "max": maximum},
+            "args": {"min": vmin, "max": vmax},
         }
     elif cost_str == Cost.one_minus_erf.value:
-        mean = np.mean(im)
-        maximum = np.max(im)
         std = np.std(im)
-        cost = OneMinusErf(maximum, mean, std)
+        mean = np.mean(im)
+        cost = OneMinusErf(vmax, mean, std)
         # reduce z-score by a factor,
         # so we can numerically distinguish more
         # very bright voxels
@@ -250,7 +249,7 @@ def _get_cost(im, cost_str, z_fudge=DEFAULT_Z_FUDGE):
         params["fill_cost_function"] = {
             "name": Cost.one_minus_erf.value,
             "args": {
-                "max": maximum,
+                "max": vmax,
                 "average": mean,
                 "standardDeviation": std,
                 "zFudge": z_fudge,
@@ -369,15 +368,22 @@ def main():
     calibration.pixelHeight = voxel_size[1]
     calibration.pixelDepth = voxel_size[2]
 
+    if args.cost_min is None or args.cost_max is None:
+        # Compute image statistics
+        im = open_n5_zarr_as_ndarray(args.image)[args.dataset]
+        cost = _get_cost(im, args.cost)[0]
+        del im
+    else:
+        cost = snt.Reciprocal(args.cost_min, args.cost_max)
+
     fill_swc_dir_zarr(
         swc_dir=args.swcs,
         im_path=args.image,
         out_fill_dir=args.output,
         threshold=args.threshold,
+        cost=cost,
         cal=calibration,
         key=args.dataset,
-        cost_min=args.cost_min,
-        cost_max=args.cost_max,
         voxel_size=voxel_size,
         n_levels=args.label_scales,
     )
