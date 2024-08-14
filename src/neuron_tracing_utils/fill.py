@@ -24,7 +24,7 @@ from neuron_tracing_utils.util.ioutil import (
 )
 from neuron_tracing_utils.util.java import imagej1
 from neuron_tracing_utils.util.java import snt
-
+from neuron_tracing_utils.util.swcutil import collect_swcs
 
 DEFAULT_Z_FUDGE = 0.8
 
@@ -73,30 +73,44 @@ def fill_swc_dir_zarr(
         ImgReaderFactory.create(im_path).load(im_path, key=key), ndim=3
     )
 
-    cost = snt.Reciprocal(cost_min, cost_max)
+    swcs = collect_swcs(swc_dir)
+
+    dtype = _get_label_dtype(len(swcs))
 
     label_zarr, gscore_zarr = _create_zarr_datasets(
         out_fill_dir,
         [1, 1] + list(img.dimensionsAsLongArray()),
         voxel_size=voxel_size,
+        label_dtype=dtype
     )
     label_ds = label_zarr["0"]
     gscore_ds = gscore_zarr["0"]
 
+    cost = snt.Reciprocal(cost_min, cost_max)
+
     label = 1
-    for root, dirs, files in os.walk(swc_dir):
-        swcs = [os.path.join(root, f) for f in files if f.endswith(".swc")]
-        for f in swcs:
-            tree = snt.Tree(os.path.join(root, f))
-            segments = _chunk_tree(tree)
-            for seg in tqdm(segments):
-                filler = fill_path(seg, img, cost, threshold, cal)
-                _update_fill_stores(
-                    filler.getFill(), label_ds, gscore_ds, label
-                )
-            label += 1
+    for f in swcs:
+        tree = snt.Tree(f)
+        segments = _chunk_tree(tree)
+        for seg in tqdm(segments):
+            filler = fill_path(seg, img, cost, threshold, cal)
+            _update_fill_stores(
+                filler.getFill(), label_ds, gscore_ds, label
+            )
+        label += 1
 
     _downscale_labels(label_zarr, n_levels=n_levels, voxel_size=voxel_size)
+
+
+def _get_label_dtype(num_files):
+    if num_files <= 2 ** 8:
+        return np.uint8
+    elif num_files <= 2 ** 16:
+        return np.uint16
+    elif num_files <= 2 ** 32:
+        return np.uint32
+    else:
+        return np.uint64
 
 
 def _downscale_labels(
@@ -106,14 +120,19 @@ def _downscale_labels(
     compressor=blosc.Blosc(cname="zstd", clevel=1),
 ):
     label_arr = label_ds["0"][:]
-    pyramid = multiscale(label_arr, windowed_mode, (1, 1, 2, 2, 2))[:n_levels]
+    pyramid = multiscale(
+        label_arr,
+        windowed_mode,
+        (1, 1, 2, 2, 2),
+        preserve_dtype=True
+    )[:n_levels]
     pyramid = [l.data for l in pyramid]
     for i in range(1, len(pyramid)):
         label_ds.create_dataset(
             str(i),
             data=pyramid[i],
             chunks=label_ds["0"].chunks,
-            dtype=np.uint8,
+            dtype=label_arr.dtype,
             compressor=compressor,
             write_empty_chunks=False,
             fill_value=0,
@@ -128,6 +147,7 @@ def _create_zarr_datasets(
     chunks=(1, 1, 64, 64, 64),
     compressor=blosc.Blosc(cname="zstd", clevel=1),
     voxel_size=(1.0, 1.0, 1.0),
+    label_dtype=np.uint16,
 ):
     datasets, axes = get_ome_zarr_metadata(voxel_size)
 
@@ -142,7 +162,7 @@ def _create_zarr_datasets(
         "0",
         shape=shape,
         chunks=chunks,
-        dtype=np.uint8,
+        dtype=label_dtype,
         compressor=compressor,
         write_empty_chunks=False,
         fill_value=0,

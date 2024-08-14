@@ -8,6 +8,15 @@ def collect_abspaths(base_dir):
         yield os.path.join(base_dir, f)
 
 
+def collect_swcs(base_dir):
+    swcs = []
+    for root, _, files in os.walk(base_dir):
+        for f in files:
+            if f.endswith(".swc") and os.path.isfile(os.path.join(root, f)):
+                swcs.append(os.path.join(root, f))
+    return swcs
+
+
 def swc_to_ndarray(swc_path, add_offset=True):
     swc_lines = []
     offset = None
