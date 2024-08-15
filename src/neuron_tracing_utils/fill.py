@@ -112,12 +112,12 @@ def _get_label_dtype(num_files):
 
 
 def _downscale_labels(
-    label_ds,
+    label_zarr,
     n_levels=1,
     voxel_size=(1.0, 1.0, 1.0),
     compressor=blosc.Blosc(cname="zstd", clevel=1),
 ):
-    label_arr = label_ds["0"][:]
+    label_arr = da.from_array(label_zarr["0"], chunks=label_zarr["0"].chunks)
     pyramid = multiscale(
         label_arr,
         windowed_mode,
@@ -126,17 +126,21 @@ def _downscale_labels(
     )[:n_levels]
     pyramid = [l.data for l in pyramid]
     for i in range(1, len(pyramid)):
-        label_ds.create_dataset(
+        ds = label_zarr.create_dataset(
             str(i),
-            data=pyramid[i],
-            chunks=label_ds["0"].chunks,
+            shape=pyramid[i].shape,
+            chunks=label_arr.chunksize,
             dtype=label_arr.dtype,
             compressor=compressor,
             write_empty_chunks=False,
             fill_value=0,
+            overwrite=True
         )
+        # TODO: why is lock necessary here?
+        da.store(pyramid[i], ds, compute=True, return_stored=False, lock=distributed.Lock())
+
     datasets, axes = get_ome_zarr_metadata(voxel_size, n_levels=n_levels)
-    write_multiscales_metadata(label_ds, datasets=datasets, axes=axes)
+    write_multiscales_metadata(label_zarr, datasets=datasets, axes=axes)
 
 
 def _create_zarr_datasets(
@@ -375,6 +379,8 @@ def main():
         del im
     else:
         cost = snt.Reciprocal(args.cost_min, args.cost_max)
+
+    client = Client(LocalCluster(processes=True))
 
     fill_swc_dir_zarr(
         swc_dir=args.swcs,
