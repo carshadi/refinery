@@ -9,7 +9,7 @@ import zarr
 from tensorstore import TensorStore
 from zarr.errors import PathNotFoundError
 
-from neuron_tracing_utils.util.java import imglib2, n5, aws
+from neuron_tracing_utils.util.java import imglib2, n5, aws, omezarr
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,43 +68,28 @@ class N5Reader:
 
 
 class OmeZarrReader:
+    def load(self, path, **kwargs):
+        MultiscaleImage = omezarr.MultiscaleImage
 
-    @staticmethod
-    def _get_reader(path):
+        key = kwargs.get("key", "0")
+
         path = str(path)
-
-        parsed = urlparse(path)
-        bucket = parsed.netloc
-        prefix = parsed.path
-
         if path.startswith("s3://"):
+            parsed = urlparse(path)
+            bucket = parsed.netloc
+            prefix = parsed.path
+
             config = aws.ClientConfiguration().withMaxErrorRetry(10).withMaxConnections(100)
             s3 = aws.AmazonS3ClientBuilder.standard().withClientConfiguration(
                 config
             ).build()
-            reader = n5.N5S3OmeZarrReader(s3, None, bucket, prefix.strip('/'), "/")
-            return reader
-        elif path.startswith("gs://"):
-            # TODO
-            raise NotImplementedError("GCS is not currently supported")
-        else:
-            reader = n5.N5OmeZarrReader(path)
-            return reader
 
-    def load(self, path, **kwargs):
-        key = kwargs.get("key", "volume")
-        reader = self._get_reader(path)
-        if "cache" in kwargs:
-            cache = kwargs["cache"]
-            if isinstance(cache, int):
-                dataset = n5.N5Utils.openWithBoundedSoftRefCache(reader, key, cache)
-            elif isinstance(cache, bool) and cache:
-                dataset = n5.N5Utils.openWithDiskCache(reader, key)
-            else:
-                dataset = n5.N5Utils.open(reader, key)
+            reader = MultiscaleImage.ZarrKeyValueReaderBuilder(s3, bucket, prefix.strip('/'))
         else:
-            dataset = n5.N5Utils.open(reader, key)
-        return dataset
+            reader = MultiscaleImage.ZarrKeyValueReaderBuilder(path)
+
+        multiscale = MultiscaleImage(reader)
+        return multiscale.getImg(int(key))
 
 
 class ImgReaderFactory:

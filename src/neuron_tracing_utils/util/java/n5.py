@@ -18,10 +18,6 @@ def _java_setup():
     GzipCompression = scyjava.jimport(
         "org.janelia.saalfeldlab.n5.GzipCompression"
     )
-    global N5S3OmeZarrReader
-    N5S3OmeZarrReader = scyjava.jimport("org.embl.mobie.io.ome.zarr.readers.N5S3OmeZarrReader")
-    global N5OmeZarrReader
-    N5OmeZarrReader = scyjava.jimport("org.embl.mobie.io.ome.zarr.readers.N5OmeZarrReader")
 
 
 scyjava.when_jvm_starts(_java_setup)

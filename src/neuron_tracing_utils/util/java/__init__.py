@@ -50,8 +50,8 @@ else:
     _SNT_ENDPOINT = f"org.morphonets:SNT:{_snt_version}"
     sjconf.endpoints.append(_SNT_ENDPOINT)
 
-    _mobie_io_version = get_mobie_io_version()
-    _MOBIE_IO_ENDPOINT = f"org.embl.mobie:mobie-io:{_mobie_io_version}"
-    sjconf.endpoints.append(_MOBIE_IO_ENDPOINT)
+    _bigdataviewer_omezarr_version = get_bigdataviewer_omezarr_version()
+    _OMEZARR_ENDPOINT = f"org.bigdataviewer:bigdataviewer-omezarr:{_bigdataviewer_omezarr_version}"
+    sjconf.endpoints.append(_OMEZARR_ENDPOINT)
 
     sjconf.endpoints.append("net.imagej:imagej-legacy:MANAGED")

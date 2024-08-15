@@ -6,8 +6,8 @@ _snt_version = os.getenv("SNT_VERSION", _default_snt_version)
 _default_fiji_version = "2.14.0"
 _fiji_version = os.getenv("FIJI_VERSION", _default_fiji_version)
 
-_default_mobie_io_version = "2.1.2"
-_mobie_io_version = os.getenv("MOBIE_IO_VERSION", _default_mobie_io_version)
+_default_bigdataviewer_omezarr_version = "0.2.4"
+_bigdataviewer_omezarr_version = os.getenv("BIGDATVIEWER_OMEZARR_VERSION", _default_bigdataviewer_omezarr_version)
 
 _default_java_opts = None
 _java_opts = os.getenv("JAVA_OPTS", _default_java_opts)
@@ -36,14 +36,14 @@ def get_fiji_version():
     return _fiji_version
 
 
-def set_mobie_io_version(version):
-    global _mobie_io_version
-    _mobie_io_version = version
+def set_bigdataviewer_omezarr_version(version):
+    global _bigdataviewer_omezarr_version
+    _bigdataviewer_omezarr_version = version
 
 
-def get_mobie_io_version():
-    global _mobie_io_version
-    return _mobie_io_version
+def get_bigdataviewer_omezarr_version():
+    global _bigdataviewer_omezarr_version
+    return _bigdataviewer_omezarr_version
 
 
 def get_java_opts():
