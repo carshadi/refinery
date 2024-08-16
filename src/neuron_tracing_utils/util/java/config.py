@@ -3,7 +3,7 @@ import os
 _default_snt_version = "4.2.1"
 _snt_version = os.getenv("SNT_VERSION", _default_snt_version)
 
-_default_fiji_version = "2.14.0"
+_default_fiji_version = "2.15.1"
 _fiji_version = os.getenv("FIJI_VERSION", _default_fiji_version)
 
 _default_bigdataviewer_omezarr_version = "0.2.4"
