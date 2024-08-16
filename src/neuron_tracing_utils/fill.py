@@ -7,6 +7,9 @@ import shutil
 from enum import Enum
 
 import numpy as np
+import distributed
+import dask.array as da
+from distributed import Client, LocalCluster
 import scyjava
 from ome_zarr.writer import write_multiscales_metadata
 from tqdm import tqdm
