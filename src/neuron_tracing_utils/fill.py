@@ -7,11 +7,12 @@ import shutil
 from enum import Enum
 
 import numpy as np
-import distributed
+import dask
 import dask.array as da
-from distributed import Client, LocalCluster
+from distributed import Client, LocalCluster, Lock
 import scyjava
 from ome_zarr.writer import write_multiscales_metadata
+from scipy.ndimage import median_filter
 from tqdm import tqdm
 import zarr
 from numcodecs import blosc
@@ -19,25 +20,22 @@ from xarray_multiscale import multiscale
 from xarray_multiscale.reducers import windowed_mode
 
 from neuron_tracing_utils.util.miscutil import range_with_end
-from neuron_tracing_utils.transform import WorldToVoxel
-from neuron_tracing_utils.util import imgutil
 from neuron_tracing_utils.util.ioutil import (
-    ImgReaderFactory,
     get_ome_zarr_metadata,
     open_n5_zarr_as_ndarray,
 )
-from neuron_tracing_utils.util.java import imagej1
 from neuron_tracing_utils.util.java import snt
+from neuron_tracing_utils.util.java import imagej1
 from neuron_tracing_utils.util.swcutil import collect_swcs
 
-DEFAULT_Z_FUDGE = 0.8
+from imglyb import to_imglib
 
 
 class Cost(Enum):
     """Enum for cost functions a user can select"""
-
     reciprocal = "reciprocal"
     one_minus_erf = "one-minus-erf"
+    gaussian_mixture = "gaussian-mixture"
 
 
 def fill_paths(path_list, img, cost, threshold, calibration):
@@ -65,16 +63,21 @@ def fill_swc_dir_zarr(
     swc_dir,
     im_path,
     out_fill_dir,
+    cost_str,
     threshold,
-    cost,
     cal,
     key=None,
     voxel_size=(1.0, 1.0, 1.0),
-    n_levels=1,
+    n_levels=1
 ):
-    img = imgutil.get_hyperslice(
-        ImgReaderFactory.create(im_path).load(im_path, key=key), ndim=3
-    )
+
+    arr = open_n5_zarr_as_ndarray(im_path)[key][:].squeeze()
+    arr = median_filter(arr, size=1)
+
+    mean, std = image_stats(arr)
+    print(f"Mean: {mean}, Std: {std}")
+
+    img = to_imglib(arr)
 
     swcs = collect_swcs(swc_dir)
 
@@ -94,6 +97,8 @@ def fill_swc_dir_zarr(
         tree = snt.Tree(f)
         segments = _chunk_tree(tree)
         for seg in tqdm(segments):
+            vals = _path_values(img, seg)
+            cost, _ = _get_cost(cost_str, vals, mean, std)
             filler = fill_path(seg, img, cost, threshold, cal)
             _update_fill_stores(
                 filler.getFill(), label_ds, gscore_ds, label
@@ -101,6 +106,12 @@ def fill_swc_dir_zarr(
         label += 1
 
     _downscale_labels(label_zarr, n_levels=n_levels, voxel_size=voxel_size)
+
+
+def image_stats(im):
+    im = da.from_array(im, chunks=(256,256,256))
+    mean, std = dask.compute(im.mean(), im.std())
+    return mean, std
 
 
 def _get_label_dtype(num_files):
@@ -140,7 +151,7 @@ def _downscale_labels(
             overwrite=True
         )
         # TODO: why is lock necessary here?
-        da.store(pyramid[i], ds, compute=True, return_stored=False, lock=distributed.Lock())
+        da.store(pyramid[i], ds, compute=True, return_stored=False, lock=Lock())
 
     datasets, axes = get_ome_zarr_metadata(voxel_size, n_levels=n_levels)
     write_multiscales_metadata(label_zarr, datasets=datasets, axes=axes)
@@ -220,7 +231,7 @@ def _update_fill_stores(fill, label_ds, gscore_ds, label):
         gscore_ds.vindex[better_nodes] = scores[better_idx]
 
 
-def _chunk_tree(tree, seg_len=1000):
+def _chunk_tree(tree, seg_len=100):
     paths = []
     for b in snt.TreeAnalyzer(tree).getBranches():
         idx = list(range_with_end(0, b.size() - 1, seg_len))
@@ -229,37 +240,40 @@ def _chunk_tree(tree, seg_len=1000):
     return paths
 
 
-def _get_cost(im, cost_str, z_fudge=DEFAULT_Z_FUDGE, percentiles=(1, 99.9)):
-    Reciprocal = snt.Reciprocal
-    OneMinusErf = snt.OneMinusErf
-
+def _get_cost(cost_str, path_values, im_mean, im_std):
     params = {}
 
-    vmin, vmax = np.percentile(im, percentiles)
-
-    print(f"Percentiles: {(vmin, vmax)}")
-
     if cost_str == Cost.reciprocal.value:
-        cost = Reciprocal(vmin, vmax)
+        cost_min = im_mean
+        cost_max = np.median(path_values)
+        cost = snt.Reciprocal(cost_min, cost_max)
         params["fill_cost_function"] = {
             "name": Cost.reciprocal.value,
-            "args": {"min": vmin, "max": vmax},
+            "args": {"min": cost_min, "max": cost_max},
         }
     elif cost_str == Cost.one_minus_erf.value:
-        std = np.std(im)
-        mean = np.mean(im)
-        cost = OneMinusErf(vmax, mean, std)
-        # reduce z-score by a factor,
-        # so we can numerically distinguish more
-        # very bright voxels
-        cost.setZFudge(z_fudge)
+        cost_max = np.percentile(path_values, 80)
+        cost = snt.OneMinusErf(cost_max, im_mean, im_std)
         params["fill_cost_function"] = {
             "name": Cost.one_minus_erf.value,
             "args": {
-                "max": vmax,
-                "average": mean,
-                "standardDeviation": std,
-                "zFudge": z_fudge,
+                "max": cost_max,
+                "average": im_mean,
+                "standardDeviation": im_std,
+            },
+        }
+    elif cost_str == Cost.gaussian_mixture.value:
+        components = 2
+        z_score_penalty = 1.0
+        cost = snt.GaussianMixtureCost(path_values, components, im_mean, im_std, z_score_penalty)
+        params["fill_cost_function"] = {
+            "name": Cost.gaussian_mixture.value,
+            "args": {
+                "values": path_values.tolist(),
+                "components": 2,
+                "mean": im_mean,
+                "standard_deviation": im_std,
+                "z_score_penalty": 1.0,
             },
         }
     else:
@@ -270,12 +284,11 @@ def _get_cost(im, cost_str, z_fudge=DEFAULT_Z_FUDGE, percentiles=(1, 99.9)):
 
 def _path_values(img, path):
     ProfileProcessor = snt.ProfileProcessor
-
-    shape = ProfileProcessor.Shape.CENTERLINE
     processor = ProfileProcessor(img, path)
-    processor.setShape(shape)
-    vals = np.array(processor.call(), dtype=float)
-    return vals
+    processor.setShape(ProfileProcessor.Shape.HYPERSPHERE)
+    processor.setRadius(1)
+    processor.setMetric(ProfileProcessor.Metric.MAX)
+    return np.array(processor.call())
 
 
 def main():
@@ -293,22 +306,16 @@ def main():
     parser.add_argument(
         "--image",
         type=str,
-        help="directory of images associated with the .swc files",
+        help="path to the ome-zarr container",
     )
     parser.add_argument(
-        "--dataset", type=str, default=None, help="path to the n5/zarr dataset"
+        "--dataset", type=str, default=None, help="path to the zarr array in the container"
     )
     parser.add_argument(
         "--threshold",
         type=float,
         default=0.02,
         help="distance threshold for fill algorithm",
-    )
-    parser.add_argument(
-        "--transform",
-        type=str,
-        help='path to the "transform.txt" file',
-        default=None,
     )
     parser.add_argument(
         "--voxel-size",
@@ -324,20 +331,6 @@ def main():
         help="cost function for the Dijkstra search",
     )
     parser.add_argument("--log-level", type=int, default=logging.INFO)
-    parser.add_argument(
-        "--cost-min",
-        type=float,
-        default=None,
-        help="the value at which the cost function is maximized, "
-        "expressed in number of standard deviations from the mean intensity.",
-    )
-    parser.add_argument(
-        "--cost-max",
-        type=float,
-        default=None,
-        help="the value at which the cost function is minimized, expressed in"
-        "number of standard deviations from the mean intensity.",
-    )
     parser.add_argument(
         "--label-scales",
         type=int,
@@ -361,27 +354,13 @@ def main():
 
     os.makedirs(args.output, exist_ok=True)
 
-    calibration = imagej1.Calibration()
-    if args.transform is not None:
-        voxel_size = WorldToVoxel(args.transform).scale
-    elif args.voxel_size is not None:
-        voxel_size = ast.literal_eval(args.voxel_size)
-    else:
-        raise ValueError(
-            "Either --transform or --voxel-size must be specified."
-        )
+    voxel_size = ast.literal_eval(args.voxel_size)
     logging.info(f"Using voxel size: {voxel_size}")
+
+    calibration = imagej1.Calibration()
     calibration.pixelWidth = voxel_size[0]
     calibration.pixelHeight = voxel_size[1]
     calibration.pixelDepth = voxel_size[2]
-
-    if args.cost_min is None or args.cost_max is None:
-        # Compute image statistics
-        im = open_n5_zarr_as_ndarray(args.image)[args.dataset]
-        cost = _get_cost(im, args.cost)[0]
-        del im
-    else:
-        cost = snt.Reciprocal(args.cost_min, args.cost_max)
 
     client = Client(LocalCluster(processes=True))
 
@@ -389,8 +368,8 @@ def main():
         swc_dir=args.swcs,
         im_path=args.image,
         out_fill_dir=args.output,
+        cost_str=args.cost,
         threshold=args.threshold,
-        cost=cost,
         cal=calibration,
         key=args.dataset,
         voxel_size=voxel_size,

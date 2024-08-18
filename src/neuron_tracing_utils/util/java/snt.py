@@ -1,3 +1,5 @@
+import logging
+
 import scyjava
 
 
@@ -30,6 +32,13 @@ def _java_setup():
     OneMinusErf = scyjava.jimport("sc.fiji.snt.tracing.cost.OneMinusErf")
     global Reciprocal
     Reciprocal = scyjava.jimport("sc.fiji.snt.tracing.cost.Reciprocal")
+
+    global GaussianMixtureCost
+    try:
+        GaussianMixtureCost = scyjava.jimport("sc.fiji.snt.tracing.cost.GaussianMixtureCost")
+    except Exception as e:
+        logging.warning(e)
+
     global Dijkstra
     Dijkstra = scyjava.jimport("sc.fiji.snt.tracing.heuristic.Dijkstra")
     global Euclidean
