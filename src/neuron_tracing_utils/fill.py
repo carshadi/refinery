@@ -291,6 +291,9 @@ def _path_values(img, path, mode="mean"):
     if mode == "mean":
         processor.setMetric(ProfileProcessor.Metric.MEAN)
         return np.array(processor.call())
+    elif mode == "max":
+        processor.setMetric(ProfileProcessor.Metric.MAX)
+        return np.array(processor.call())
     elif mode == "raw":
         raw_values = processor.getRawValues(1)
         a = []
