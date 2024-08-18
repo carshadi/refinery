@@ -68,7 +68,8 @@ def fill_swc_dir_zarr(
     cal,
     key=None,
     voxel_size=(1.0, 1.0, 1.0),
-    n_levels=1
+    n_levels=1,
+    profile_mode='mean'
 ):
 
     arr = open_n5_zarr_as_ndarray(im_path)[key][:].squeeze()
@@ -97,7 +98,7 @@ def fill_swc_dir_zarr(
         tree = snt.Tree(f)
         segments = _chunk_tree(tree)
         for seg in tqdm(segments):
-            vals = _path_values(img, seg)
+            vals = _path_values(img, seg, mode=profile_mode)
             cost, _ = _get_cost(cost_str, vals, mean, std)
             filler = fill_path(seg, img, cost, threshold, cal)
             _update_fill_stores(
@@ -282,13 +283,22 @@ def _get_cost(cost_str, path_values, im_mean, im_std):
     return cost, params
 
 
-def _path_values(img, path):
+def _path_values(img, path, mode="mean"):
     ProfileProcessor = snt.ProfileProcessor
     processor = ProfileProcessor(img, path)
     processor.setShape(ProfileProcessor.Shape.HYPERSPHERE)
     processor.setRadius(1)
-    processor.setMetric(ProfileProcessor.Metric.MAX)
-    return np.array(processor.call())
+    if mode == "mean":
+        processor.setMetric(ProfileProcessor.Metric.MEAN)
+        return np.array(processor.call())
+    elif mode == "raw":
+        raw_values = processor.getRawValues(1)
+        a = []
+        for vals in dict(raw_values).values():
+            a.extend(vals)
+        return np.array(a)
+    else:
+        raise ValueError(f"Invalid mode {mode}")
 
 
 def main():
@@ -337,6 +347,13 @@ def main():
         default=1,
         help="number of levels in the multiscale zarr pyramid for the label mask",
     )
+    parser.add_argument(
+        "--profile-mode",
+        type=str,
+        default='raw',
+        choices=['mean', 'max', 'raw'],
+        help="mode for profile processing",
+    )
 
     args = parser.parse_args()
     if os.path.isdir(args.output):
@@ -374,6 +391,7 @@ def main():
         key=args.dataset,
         voxel_size=voxel_size,
         n_levels=args.label_scales,
+        profile_mode=args.profile_mode
     )
 
 
