@@ -69,7 +69,9 @@ def fill_swc_dir_zarr(
     key=None,
     voxel_size=(1.0, 1.0, 1.0),
     n_levels=1,
-    profile_mode='mean'
+    profile_mode='mean',
+    mixture_components=2,
+    z_score_penalty=1.0
 ):
 
     arr = open_n5_zarr_as_ndarray(im_path)[key][:].squeeze()
@@ -99,7 +101,14 @@ def fill_swc_dir_zarr(
         segments = _chunk_tree(tree)
         for seg in tqdm(segments):
             vals = _path_values(img, seg, mode=profile_mode)
-            cost, _ = _get_cost(cost_str, vals, mean, std)
+            cost, _ = _get_cost(
+                cost_str,
+                vals,
+                mean,
+                std,
+                mixture_components,
+                z_score_penalty
+            )
             filler = fill_path(seg, img, cost, threshold, cal)
             _update_fill_stores(
                 filler.getFill(), label_ds, gscore_ds, label
@@ -241,7 +250,7 @@ def _chunk_tree(tree, seg_len=100):
     return paths
 
 
-def _get_cost(cost_str, path_values, im_mean, im_std):
+def _get_cost(cost_str, path_values, im_mean, im_std, mixture_components=2, z_score_penalty=1.0):
     params = {}
 
     if cost_str == Cost.reciprocal.value:
@@ -264,17 +273,21 @@ def _get_cost(cost_str, path_values, im_mean, im_std):
             },
         }
     elif cost_str == Cost.gaussian_mixture.value:
-        components = 2
-        z_score_penalty = 1.0
-        cost = snt.GaussianMixtureCost(path_values, components, im_mean, im_std, z_score_penalty)
+        cost = snt.GaussianMixtureCost(
+            path_values,
+            mixture_components,
+            im_mean,
+            im_std,
+            z_score_penalty
+        )
         params["fill_cost_function"] = {
             "name": Cost.gaussian_mixture.value,
             "args": {
                 "values": path_values.tolist(),
-                "components": 2,
+                "components": mixture_components,
                 "mean": im_mean,
                 "standard_deviation": im_std,
-                "z_score_penalty": 1.0,
+                "z_score_penalty": z_score_penalty,
             },
         }
     else:
@@ -357,6 +370,16 @@ def main():
         choices=['mean', 'max', 'raw'],
         help="mode for profile processing",
     )
+    parser.add_argument(
+        "--mixture-components",
+        type=int,
+        default=2
+    )
+    parser.add_argument(
+        "--z-score-penalty",
+        type=float,
+        default=1.0
+    )
 
     args = parser.parse_args()
     if os.path.isdir(args.output):
@@ -394,7 +417,9 @@ def main():
         key=args.dataset,
         voxel_size=voxel_size,
         n_levels=args.label_scales,
-        profile_mode=args.profile_mode
+        profile_mode=args.profile_mode,
+        mixture_components=args.mixture_components,
+        z_score_penalty=args.z_score_penalty
     )
 
 
