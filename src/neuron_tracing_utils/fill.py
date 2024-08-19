@@ -70,6 +70,7 @@ def fill_swc_dir_zarr(
     voxel_size=(1.0, 1.0, 1.0),
     n_levels=1,
     profile_mode='mean',
+    profile_radius=1,
     mixture_components=2,
     z_score_penalty=1.0
 ):
@@ -100,7 +101,7 @@ def fill_swc_dir_zarr(
         tree = snt.Tree(f)
         segments = _chunk_tree(tree)
         for seg in tqdm(segments):
-            vals = _path_values(img, seg, mode=profile_mode)
+            vals = _path_values(img, seg, mode=profile_mode, radius=profile_radius)
             cost, _ = _get_cost(
                 cost_str,
                 vals,
@@ -296,11 +297,11 @@ def _get_cost(cost_str, path_values, im_mean, im_std, mixture_components=2, z_sc
     return cost, params
 
 
-def _path_values(img, path, mode="mean"):
+def _path_values(img, path, mode="mean", radius=1):
     ProfileProcessor = snt.ProfileProcessor
     processor = ProfileProcessor(img, path)
     processor.setShape(ProfileProcessor.Shape.HYPERSPHERE)
-    processor.setRadius(1)
+    processor.setRadius(radius)
     if mode == "mean":
         processor.setMetric(ProfileProcessor.Metric.MEAN)
         return np.array(processor.call())
@@ -380,6 +381,12 @@ def main():
         type=float,
         default=1.0
     )
+    parser.add_argument(
+        "--profile-radius",
+        type=int,
+        default=1,
+        help="radius for profile processing"
+    )
 
     args = parser.parse_args()
     if os.path.isdir(args.output):
@@ -419,7 +426,8 @@ def main():
         n_levels=args.label_scales,
         profile_mode=args.profile_mode,
         mixture_components=args.mixture_components,
-        z_score_penalty=args.z_score_penalty
+        z_score_penalty=args.z_score_penalty,
+        profile_radius=args.profile_radius
     )
 
 
