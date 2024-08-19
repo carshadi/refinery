@@ -71,6 +71,7 @@ def fill_swc_dir_zarr(
     n_levels=1,
     profile_mode='mean',
     profile_radius=1,
+    profile_shape='sphere',
     mixture_components=2,
     z_score_penalty=1.0
 ):
@@ -101,7 +102,7 @@ def fill_swc_dir_zarr(
         tree = snt.Tree(f)
         segments = _chunk_tree(tree)
         for seg in tqdm(segments):
-            vals = _path_values(img, seg, mode=profile_mode, radius=profile_radius)
+            vals = _path_values(img, seg, mode=profile_mode, radius=profile_radius, shape=profile_shape)
             cost, _ = _get_cost(
                 cost_str,
                 vals,
@@ -297,10 +298,18 @@ def _get_cost(cost_str, path_values, im_mean, im_std, mixture_components=2, z_sc
     return cost, params
 
 
-def _path_values(img, path, mode="mean", radius=1):
+def _path_values(img, path, mode="mean", radius=1, shape="sphere"):
     ProfileProcessor = snt.ProfileProcessor
+    if shape == "sphere":
+        shape = ProfileProcessor.Shape.HYPERSPHERE
+    elif shape == "disk":
+        shape = ProfileProcessor.Shape.DISK
+    elif shape == "none":
+        shape = ProfileProcessor.Shape.NONE
+    else:
+        raise ValueError(f"Invalid shape {shape}")
     processor = ProfileProcessor(img, path)
-    processor.setShape(ProfileProcessor.Shape.HYPERSPHERE)
+    processor.setShape(shape)
     processor.setRadius(radius)
     if mode == "mean":
         processor.setMetric(ProfileProcessor.Metric.MEAN)
@@ -387,6 +396,13 @@ def main():
         default=1,
         help="radius for profile processing"
     )
+    parser.add_argument(
+        "--profile-shape",
+        type=str,
+        default="disk",
+        choices=["sphere", "disk", "none"],
+        help="shape for profile processing"
+    )
 
     args = parser.parse_args()
     if os.path.isdir(args.output):
@@ -427,7 +443,8 @@ def main():
         profile_mode=args.profile_mode,
         mixture_components=args.mixture_components,
         z_score_penalty=args.z_score_penalty,
-        profile_radius=args.profile_radius
+        profile_radius=args.profile_radius,
+        profile_shape=args.profile_shape
     )
 
 
