@@ -76,6 +76,7 @@ def fill_swc_dir_zarr(
         profile_shape='sphere',
         mixture_components=2,
         z_score_penalty=1.0,
+        fill_chunk_size=1000,
         threads=1
 ):
     print("Loading image")
@@ -109,7 +110,7 @@ def fill_swc_dir_zarr(
     label = 1
     for f in swcs:
         tree = snt.Tree(f)
-        segments = _chunk_tree(tree)
+        segments = _chunk_tree(tree, fill_chunk_size)
         with ThreadPoolExecutor(max_workers=threads) as executor:
             futures = []
             for seg in segments:
@@ -430,6 +431,12 @@ def main():
         help="shape for profile processing"
     )
     parser.add_argument(
+        "--fill-chunk-size",
+        type=int,
+        default=1000,
+        help="number of path nodes in each fill object"
+    )
+    parser.add_argument(
         "--threads",
         type=int,
         default=8,
@@ -477,6 +484,7 @@ def main():
         z_score_penalty=args.z_score_penalty,
         profile_radius=args.profile_radius,
         profile_shape=args.profile_shape,
+        fill_chunk_size=args.fill_chunk_size,
         threads=args.threads
     )
 
