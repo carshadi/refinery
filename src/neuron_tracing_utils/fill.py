@@ -4,15 +4,17 @@ import json
 import logging
 import os
 import shutil
+import time
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 
 import numpy as np
 import dask
 import dask.array as da
+from dask_image.ndfilters import median_filter
 from distributed import Client, LocalCluster, Lock
 import scyjava
 from ome_zarr.writer import write_multiscales_metadata
-from scipy.ndimage import median_filter
 from tqdm import tqdm
 import zarr
 from numcodecs import blosc
@@ -60,20 +62,21 @@ def fill_path(path, img, cost, threshold, calibration):
 
 
 def fill_swc_dir_zarr(
-    swc_dir,
-    im_path,
-    out_fill_dir,
-    cost_str,
-    threshold,
-    cal,
-    key=None,
-    voxel_size=(1.0, 1.0, 1.0),
-    n_levels=1,
-    profile_mode='mean',
-    profile_radius=1,
-    profile_shape='sphere',
-    mixture_components=2,
-    z_score_penalty=1.0
+        swc_dir,
+        im_path,
+        out_fill_dir,
+        cost_str,
+        threshold,
+        cal,
+        key=None,
+        voxel_size=(1.0, 1.0, 1.0),
+        n_levels=1,
+        profile_mode='mean',
+        profile_radius=1,
+        profile_shape='sphere',
+        mixture_components=2,
+        z_score_penalty=1.0,
+        threads=1
 ):
     print("Loading image")
     arr = da.from_zarr(open_n5_zarr_as_ndarray(im_path)[key]).squeeze()
@@ -84,8 +87,6 @@ def fill_swc_dir_zarr(
     print("Calculating image stats")
     arr, mean, std = dask.compute(arr, arr.mean(), arr.std())
     print(f"Mean: {mean}, Std: {std}")
-
-    img = to_imglib(arr)
 
     swcs = collect_swcs(swc_dir)
 
@@ -100,33 +101,55 @@ def fill_swc_dir_zarr(
     label_ds = label_zarr["0"]
     gscore_ds = gscore_zarr["0"]
 
+    # Convert to Java object
+    img = to_imglib(arr)
+
+    t0 = time.time()
+    print("Starting fill")
     label = 1
     for f in swcs:
         tree = snt.Tree(f)
         segments = _chunk_tree(tree)
-        for seg in tqdm(segments):
-            vals = _path_values(img, seg, mode=profile_mode, radius=profile_radius, shape=profile_shape)
-            cost, _ = _get_cost(
-                cost_str,
-                vals,
-                mean,
-                std,
-                mixture_components,
-                z_score_penalty
-            )
-            filler = fill_path(seg, img, cost, threshold, cal)
+        with ThreadPoolExecutor(max_workers=threads) as executor:
+            futures = []
+            for seg in segments:
+                def _worker(seg=seg):
+                    vals = _path_values(
+                        img,
+                        seg,
+                        mode=profile_mode,
+                        radius=profile_radius,
+                        shape=profile_shape
+                    )
+                    cost, _ = _get_cost(
+                        cost_str,
+                        vals,
+                        mean,
+                        std,
+                        mixture_components,
+                        z_score_penalty
+                    )
+                    return fill_path(seg, img, cost, threshold, cal)
+
+                futures.append(executor.submit(_worker))
+
+            fillers = [fut.result() for fut in tqdm(futures)]
+
+        for filler in fillers:
             _update_fill_stores(
                 filler.getFill(), label_ds, gscore_ds, label
             )
+
         label += 1
 
+    t1 = time.time()
+    print(f"Time to fill: {t1 - t0}")
+
+    print("Downscaling labels")
+    t0 = time.time()
     _downscale_labels(label_zarr, n_levels=n_levels, voxel_size=voxel_size)
-
-
-def image_stats(im):
-    im = da.from_array(im, chunks=(256,256,256))
-    mean, std = dask.compute(im.mean(), im.std())
-    return mean, std
+    t1 = time.time()
+    print(f"Time to downscale labels: {t1 - t0}")
 
 
 def _get_label_dtype(num_files):
@@ -141,10 +164,10 @@ def _get_label_dtype(num_files):
 
 
 def _downscale_labels(
-    label_zarr,
-    n_levels=1,
-    voxel_size=(1.0, 1.0, 1.0),
-    compressor=blosc.Blosc(cname="zstd", clevel=1),
+        label_zarr,
+        n_levels=1,
+        voxel_size=(1.0, 1.0, 1.0),
+        compressor=blosc.Blosc(cname="zstd", clevel=1),
 ):
     label_arr = da.from_array(label_zarr["0"], chunks=label_zarr["0"].chunks)
     pyramid = multiscale(
@@ -173,12 +196,12 @@ def _downscale_labels(
 
 
 def _create_zarr_datasets(
-    out_fill_dir,
-    shape,
-    chunks=(1, 1, 64, 64, 64),
-    compressor=blosc.Blosc(cname="zstd", clevel=1),
-    voxel_size=(1.0, 1.0, 1.0),
-    label_dtype=np.uint16,
+        out_fill_dir,
+        shape,
+        chunks=(1, 1, 64, 64, 64),
+        compressor=blosc.Blosc(cname="zstd", clevel=1),
+        voxel_size=(1.0, 1.0, 1.0),
+        label_dtype=np.uint16,
 ):
     datasets, axes = get_ome_zarr_metadata(voxel_size)
 
@@ -406,6 +429,12 @@ def main():
         choices=["sphere", "disk", "none"],
         help="shape for profile processing"
     )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=8,
+        help="number of threads to use for filling"
+    )
 
     args = parser.parse_args()
     if os.path.isdir(args.output):
@@ -431,7 +460,7 @@ def main():
     calibration.pixelHeight = voxel_size[1]
     calibration.pixelDepth = voxel_size[2]
 
-    client = Client(LocalCluster(processes=True))
+    client = Client(LocalCluster(processes=False))
 
     fill_swc_dir_zarr(
         swc_dir=args.swcs,
@@ -447,7 +476,8 @@ def main():
         mixture_components=args.mixture_components,
         z_score_penalty=args.z_score_penalty,
         profile_radius=args.profile_radius,
-        profile_shape=args.profile_shape
+        profile_shape=args.profile_shape,
+        threads=args.threads
     )
 
 

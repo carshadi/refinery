@@ -21,6 +21,7 @@ dependencies = [
     "toml",
     "dask==2024.8.0",
     "distributed==2024.8.0",
+    "dask-image",
     "s3fs",
     "boto3",
     "gcsfs",
