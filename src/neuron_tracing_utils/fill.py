@@ -75,11 +75,14 @@ def fill_swc_dir_zarr(
     mixture_components=2,
     z_score_penalty=1.0
 ):
+    print("Loading image")
+    arr = da.from_zarr(open_n5_zarr_as_ndarray(im_path)[key]).squeeze()
 
-    arr = open_n5_zarr_as_ndarray(im_path)[key][:].squeeze()
-    arr = median_filter(arr, size=1)
+    print("Running median filter")
+    arr = median_filter(arr, footprint=np.ones((3, 3, 3)))
 
-    mean, std = image_stats(arr)
+    print("Calculating image stats")
+    arr, mean, std = dask.compute(arr, arr.mean(), arr.std())
     print(f"Mean: {mean}, Std: {std}")
 
     img = to_imglib(arr)
