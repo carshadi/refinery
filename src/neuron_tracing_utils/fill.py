@@ -90,7 +90,7 @@ def fill_swc_dir_zarr(
 
     label_zarr, gscore_zarr = _create_zarr_datasets(
         out_fill_dir,
-        [1, 1] + list(img.dimensionsAsLongArray()),
+        (1, 1, *arr.shape),
         voxel_size=voxel_size,
         label_dtype=dtype
     )
