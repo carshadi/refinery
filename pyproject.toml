@@ -22,7 +22,7 @@ dependencies = [
     "dask==2024.8.0",
     "distributed==2024.8.0",
     "dask-image",
-    "s3fs",
+    "s3fs==2024.6.1",
     "boto3",
     "gcsfs",
     "tensorstore",
