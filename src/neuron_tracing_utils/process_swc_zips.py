@@ -8,6 +8,7 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import Any, List
 
 import boto3
+import numpy as np
 import scyjava
 
 from neuron_tracing_utils.resample import resample_tree
@@ -46,6 +47,7 @@ def process_swc_file(
     voxel_size: tuple = (1, 1, 1),
     node_spacing: int = 20,
     radius: float = 1.0,
+    bbox: np.array = None
 ) -> Any:
     """
     Processes an SWC file, performs resampling and filtering based on cable
@@ -61,6 +63,7 @@ def process_swc_file(
         resampling, default is 20.
         radius (float, optional): The radius to be set for the resampled
         tree, default is 1.0.
+        bbox (np.array, optional): The bounding box to filter the SWC file,
 
     Returns:
         snt.Tree: The processed Tree object if it passes the length
@@ -70,6 +73,11 @@ def process_swc_file(
     arr[:, 1] = 2
 
     g = sntutil.ndarray_to_graph(arr)
+
+    if bbox is not None:
+        points = np.array([[v.getX(), v.getY(), v.getZ()] for v in g.vertexSet()])
+        if not np.any(np.all((points >= bbox[0]) & (points <= bbox[1]), axis=1)):
+            return None
 
     tree = g.getTree()
     tree.scale(*voxel_size)
@@ -91,6 +99,7 @@ def process_zip_file(
     voxel_size: tuple,
     node_spacing: int,
     radius: float,
+    bbox: np.array = None
 ) -> int:
     """
     Processes the files in a given zip file and saves the processed files to
@@ -100,6 +109,11 @@ def process_zip_file(
         zip_path (str): The path of the zip file.
         output_dir (str): The directory where the processed files will be
         saved.
+        length_threshold (int): The minimum length of cable to consider.
+        voxel_size (tuple): The scaling factor for each dimension.
+        node_spacing (int): The spacing between nodes after resampling.
+        radius (float): The radius to be set for the resampled tree.
+        bbox (np.array, optional): The bounding box to filter the SWC file.
 
     Returns:
         int: The number of files filtered out.
@@ -120,6 +134,7 @@ def process_zip_file(
                     voxel_size,
                     node_spacing,
                     radius,
+                    bbox
                 )
                 if tree is not None:
                     tree.saveAsSWC(os.path.join(output_dir, file))
@@ -137,6 +152,7 @@ def process_all_zip_files(
     node_spacing: int,
     radius: float,
     max_workers: int = None,
+    bbox: np.array = None
 ) -> int:
     """
     Processes all zip files in the input directory using multiple workers
@@ -152,6 +168,7 @@ def process_all_zip_files(
         radius (float): The radius to be set for the resampled tree.
         max_workers (int, optional): The maximum number of workers to use,
         default is the number of processors.
+        bbox (np.array, optional): The bounding box to filter the SWC file.
 
     Returns:
         int: The number of files filtered out.
@@ -173,6 +190,7 @@ def process_all_zip_files(
                     voxel_size,
                     node_spacing,
                     radius,
+                    bbox
                 )
             )
         for i, fut in enumerate(futures):
@@ -325,6 +343,12 @@ if __name__ == "__main__":
         help="The radius to be set for the resampled tree.",
     )
     parser.add_argument(
+        "--bbox",
+        type=str,
+        default=None,
+        help="Only keep swcs within the bounding box.",
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=multiprocessing.cpu_count(),
@@ -340,6 +364,12 @@ if __name__ == "__main__":
     zip_dir = os.path.join(args.o, "zips")
     os.makedirs(zip_dir, exist_ok=True)
 
+    bbox = None
+    if args.bbox is not None:
+        bbox = [int(x.strip()) for x in args.bbox.split(",")]
+        bbox = np.array([bbox[0:3], bbox[3:6]])
+        print("Bounding box: ", bbox)
+
     filtered_count = process_all_zip_files(
         args.i,
         swc_dir,
@@ -348,6 +378,7 @@ if __name__ == "__main__":
         args.node_spacing,
         args.radius,
         args.workers,
+        bbox=bbox
     )
 
     files = [f for f in glob.glob(f"{swc_dir}/*.swc")]
