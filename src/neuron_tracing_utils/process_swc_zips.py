@@ -72,12 +72,12 @@ def process_swc_file(
     arr = swcutil.swc_to_ndarray(swc_path)
     arr[:, 1] = 2
 
-    g = sntutil.ndarray_to_graph(arr)
-
     if bbox is not None:
-        points = np.array([[v.getX(), v.getY(), v.getZ()] for v in g.vertexSet()])
+        points = arr[:, 2:5]
         if not np.any(np.all((points >= bbox[0]) & (points <= bbox[1]), axis=1)):
             return None
+
+    g = sntutil.ndarray_to_graph(arr)
 
     tree = g.getTree()
     tree.scale(*voxel_size)
